@@ -78,8 +78,6 @@ def get_markers(
     )
 
 
-
-
 def get_data2(topics: List[str], retrieved_memories: List[Conversation]) -> dict[str, List[Any]]:
     # print('get_data2', len(topics), topics)
     # print('retrieved_memories', len(retrieved_memories))
@@ -103,9 +101,10 @@ def get_data2(topics: List[str], retrieved_memories: List[Conversation]) -> dict
     return result
 
 
-
 def generate_visualization(
-    topics: List[str], memories: List[Conversation] | None = None, file_path: str = 'embedding_visualization_multi_topic.html'
+    topics: List[str],
+    memories: List[Conversation] | None = None,
+    file_path: str = 'embedding_visualization_multi_topic.html',
 ) -> None:
     print('topics', topics)
     os.makedirs('visualizations/', exist_ok=True)
