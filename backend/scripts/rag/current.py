@@ -120,12 +120,16 @@ def generate_visualization(
         return
 
     all_embeddings = cast(Any, np.array(embedding_values))
-    if all_embeddings.ndim != 2 or all_embeddings.shape[0] < 3:
+    if all_embeddings.ndim != 2:
         return
 
+    topic_points: Any = []
     if topics:
         topic_embeddings = [openai_embeddings.embed_query(topic) for topic in topics]
         all_embeddings = cast(Any, np.vstack([all_embeddings] + topic_embeddings))
+
+    if all_embeddings.shape[0] < 3:
+        return
 
     umap_transform = cast(
         Any,
@@ -143,7 +147,6 @@ def generate_visualization(
         topic_points = umap_embeddings[-len(topics) :]
     else:
         data_points = umap_embeddings
-        topic_points = []
 
     fig: Any = make_subplots(rows=1, cols=1)
 
