@@ -115,27 +115,13 @@ def generate_visualization(
     else:
         data = get_data(topics)
 
-    embedding_values = [item[1] for item in data.values()]
-    if not embedding_values:
-        return
-
-    all_embeddings = cast(Any, np.array(embedding_values))
-    if all_embeddings.ndim != 2 or all_embeddings.shape[0] < 3:
-        return
+    all_embeddings = cast(Any, np.array([item[1] for item in data.values()]))
 
     if topics:
         topic_embeddings = [openai_embeddings.embed_query(topic) for topic in topics]
         all_embeddings = cast(Any, np.vstack([all_embeddings] + topic_embeddings))
 
-    umap_transform = cast(
-        Any,
-        umap.UMAP(
-            n_neighbors=min(15, all_embeddings.shape[0] - 1),
-            n_components=2,
-            random_state=0,
-            transform_seed=0,
-        ),
-    )
+    umap_transform = cast(Any, umap.UMAP(n_components=2, random_state=0, transform_seed=0))
     umap_embeddings = umap_transform.fit_transform(all_embeddings)
 
     if topics:
