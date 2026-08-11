@@ -26,7 +26,7 @@ def _load_visualization_module():
             'plotly.subplots': plotly_subplots,
         }
     ):
-        return load_module_fresh('rag_current_visualization', 'scripts/rag/current.py'), umap_module
+        return load_module_fresh('rag_current_visualization', 'backend/scripts/rag/current.py'), umap_module
 
 
 def test_generate_visualization_keeps_topic_augmented_small_memory_set(monkeypatch, tmp_path):
@@ -72,4 +72,46 @@ def test_generate_visualization_keeps_all_memory_points_without_topics(monkeypat
     module.generate_visualization([])
 
     assert umap_instance.fit_transform.call_args.args[0].shape == (3, 2)
+    np.testing.assert_array_equal(module.get_markers.call_args.args[1], np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]))
+    assert umap_module.UMAP.call_args.kwargs['init'] == 'random'
+    assert module.generate_html_visualization.called
+
+
+def test_generate_visualization_skips_empty_data(monkeypatch, tmp_path):
+    module, umap_module = _load_visualization_module()
+    monkeypatch.chdir(tmp_path)
+    module.get_data = lambda topics: {}
+    module.generate_html_visualization = MagicMock()
+
+    module.generate_visualization([])
+
+    umap_module.UMAP.assert_not_called()
+    module.generate_html_visualization.assert_not_called()
+
+
+def test_generate_visualization_uses_retrieved_memories(monkeypatch, tmp_path):
+    module, umap_module = _load_visualization_module()
+    monkeypatch.chdir(tmp_path)
+    memories = [SimpleNamespace(id='memory-1')]
+    module.get_data2 = MagicMock(
+        return_value={
+            'memory-1': ['First', [1.0, 0.0], ['topic']],
+            'memory-2': ['Second', [0.0, 1.0], []],
+            'memory-3': ['Third', [1.0, 1.0], []],
+        }
+    )
+    module.get_markers = MagicMock(return_value=object())
+    module.generate_html_visualization = MagicMock()
+    figure = MagicMock()
+    module.make_subplots = MagicMock(return_value=figure)
+    umap_instance = MagicMock()
+    umap_instance.fit_transform.return_value = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0], [3.0, 3.0]])
+    umap_module.UMAP.return_value = umap_instance
+    module.openai_embeddings = SimpleNamespace(embed_query=lambda topic: [0.5, 0.5])
+    module.get_query_marker = MagicMock(return_value=object())
+    module.go = SimpleNamespace(Scatter=MagicMock())
+
+    module.generate_visualization(['topic'], memories=memories)
+
+    module.get_data2.assert_called_once_with(['topic'], memories)
     assert module.generate_html_visualization.called

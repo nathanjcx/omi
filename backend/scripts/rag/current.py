@@ -134,6 +134,7 @@ def generate_visualization(
     umap_transform = cast(
         Any,
         umap.UMAP(
+            init='random' if all_embeddings.shape[0] == 3 else 'spectral',
             n_neighbors=min(15, all_embeddings.shape[0] - 1),
             n_components=2,
             random_state=0,
