@@ -1,9 +1,12 @@
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
 
 from testing.import_isolation import AutoMockModule, load_module_fresh, stub_modules
+
+RAG_CURRENT_PATH = str(Path(__file__).resolve().parents[2] / 'scripts' / 'rag' / 'current.py')
 
 
 def _load_visualization_module():
@@ -26,7 +29,7 @@ def _load_visualization_module():
             'plotly.subplots': plotly_subplots,
         }
     ):
-        return load_module_fresh('rag_current_visualization', 'backend/scripts/rag/current.py'), umap_module
+        return load_module_fresh('rag_current_visualization', RAG_CURRENT_PATH), umap_module
 
 
 def test_generate_visualization_keeps_topic_augmented_small_memory_set(monkeypatch, tmp_path):
