@@ -92,6 +92,18 @@ def test_generate_visualization_skips_empty_data(monkeypatch, tmp_path):
     module.generate_html_visualization.assert_not_called()
 
 
+def test_generate_visualization_skips_below_three_samples(monkeypatch, tmp_path):
+    module, umap_module = _load_visualization_module()
+    monkeypatch.chdir(tmp_path)
+    module.get_data = lambda topics: {'memory-1': ['First', [1.0, 0.0], []]}
+    module.generate_html_visualization = MagicMock()
+
+    module.generate_visualization([])
+
+    umap_module.UMAP.assert_not_called()
+    module.generate_html_visualization.assert_not_called()
+
+
 def test_generate_visualization_uses_retrieved_memories(monkeypatch, tmp_path):
     module, umap_module = _load_visualization_module()
     monkeypatch.chdir(tmp_path)
