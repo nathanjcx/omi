@@ -575,6 +575,15 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
                                             style: const TextStyle(color: Colors.white, fontSize: 14),
                                           ),
                                         ),
+                                        if (provider.device == null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 16),
+                                            child: Text(
+                                              context.l10n.noDeviceConnectedUseMic,
+                                              style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ),
                                       ],
                                     ),
                     ),
