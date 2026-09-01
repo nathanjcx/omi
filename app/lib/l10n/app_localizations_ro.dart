@@ -9961,6 +9961,17 @@ class AppLocalizationsRo extends AppLocalizations {
   }
 
   @override
+  String shortConversationsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Conversații scurte: $count',
+      one: '$count conversație scurtă',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String speechProfileOwnerTitle(String name) {
     return '$name\'s Speech Profile';
   }
