@@ -1861,9 +1861,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get openSettings => 'Öppna inställningar';
 
   @override
-  String get wantDifferentName => 'Vill du kallas något annat?';
-
-  @override
   String get whatsYourName => 'Vad heter du?';
 
   @override

@@ -1858,9 +1858,6 @@ class AppLocalizationsEt extends AppLocalizations {
   String get openSettings => 'Ava seaded';
 
   @override
-  String get wantDifferentName => 'Soovite kasutada muud nime?';
-
-  @override
   String get whatsYourName => 'Mis on teie nimi?';
 
   @override

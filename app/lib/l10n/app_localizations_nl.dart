@@ -1864,9 +1864,6 @@ class AppLocalizationsNl extends AppLocalizations {
   String get openSettings => 'Instellingen openen';
 
   @override
-  String get wantDifferentName => 'Wil je een andere naam gebruiken?';
-
-  @override
   String get whatsYourName => 'Wat is je naam?';
 
   @override

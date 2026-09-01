@@ -1859,9 +1859,6 @@ class AppLocalizationsSr extends AppLocalizations {
   String get openSettings => 'Отвори подешавања';
 
   @override
-  String get wantDifferentName => 'Желиш да идеш под неким другим именом?';
-
-  @override
   String get whatsYourName => 'Како се зовеш?';
 
   @override

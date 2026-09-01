@@ -1857,9 +1857,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get openSettings => 'Avaa asetukset';
 
   @override
-  String get wantDifferentName => 'Haluatko käyttää eri nimeä?';
-
-  @override
   String get whatsYourName => 'Mikä on nimesi?';
 
   @override

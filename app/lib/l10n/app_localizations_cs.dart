@@ -1861,9 +1861,6 @@ class AppLocalizationsCs extends AppLocalizations {
   String get openSettings => 'Otevřít nastavení';
 
   @override
-  String get wantDifferentName => 'Chcete jiné jméno?';
-
-  @override
   String get whatsYourName => 'Jak se jmenujete?';
 
   @override

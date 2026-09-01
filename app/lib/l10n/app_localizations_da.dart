@@ -1848,9 +1848,6 @@ class AppLocalizationsDa extends AppLocalizations {
   String get openSettings => 'Åbn indstillinger';
 
   @override
-  String get wantDifferentName => 'Vil du have et andet navn?';
-
-  @override
   String get whatsYourName => 'Hvad hedder du?';
 
   @override

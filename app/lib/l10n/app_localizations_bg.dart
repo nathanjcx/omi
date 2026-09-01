@@ -1863,9 +1863,6 @@ class AppLocalizationsBg extends AppLocalizations {
   String get openSettings => 'Отвори настройки';
 
   @override
-  String get wantDifferentName => 'Искате ли различно име?';
-
-  @override
   String get whatsYourName => 'Как се казвате?';
 
   @override

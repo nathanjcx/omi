@@ -1858,9 +1858,6 @@ class AppLocalizationsLt extends AppLocalizations {
   String get openSettings => 'Atidaryti nustatymus';
 
   @override
-  String get wantDifferentName => 'Norite, kad jus vadintų kitaip?';
-
-  @override
   String get whatsYourName => 'Koks tavo vardas?';
 
   @override

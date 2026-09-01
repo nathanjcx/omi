@@ -1861,9 +1861,6 @@ class AppLocalizationsHr extends AppLocalizations {
   String get openSettings => 'Otvori Postavke';
 
   @override
-  String get wantDifferentName => 'Želiš li da ide sa nečim drugačijim?';
-
-  @override
   String get whatsYourName => 'Koje je tvoje ime?';
 
   @override

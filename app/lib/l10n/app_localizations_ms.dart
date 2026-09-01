@@ -1865,9 +1865,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get openSettings => 'Buka Tetapan';
 
   @override
-  String get wantDifferentName => 'Mahu dipanggil dengan nama lain?';
-
-  @override
   String get whatsYourName => 'Siapa nama anda?';
 
   @override

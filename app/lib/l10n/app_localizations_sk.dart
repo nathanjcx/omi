@@ -1864,9 +1864,6 @@ class AppLocalizationsSk extends AppLocalizations {
   String get openSettings => 'Otvoriť nastavenia';
 
   @override
-  String get wantDifferentName => 'Chcete sa volať inak?';
-
-  @override
   String get whatsYourName => 'Ako sa voláš?';
 
   @override

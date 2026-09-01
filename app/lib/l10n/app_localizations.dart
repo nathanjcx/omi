@@ -3633,12 +3633,6 @@ abstract class AppLocalizations {
   /// **'Open Settings'**
   String get openSettings;
 
-  /// Question asking if user wants to change their display name
-  ///
-  /// In en, this message translates to:
-  /// **'Want to go by something else?'**
-  String get wantDifferentName;
-
   /// Question asking for user's name
   ///
   /// In en, this message translates to:

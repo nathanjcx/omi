@@ -1844,9 +1844,6 @@ class AppLocalizationsHe extends AppLocalizations {
   String get openSettings => 'פתח הגדרות';
 
   @override
-  String get wantDifferentName => 'רוצה להכנס בשם אחר?';
-
-  @override
   String get whatsYourName => 'מה שמך?';
 
   @override

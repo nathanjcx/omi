@@ -1860,9 +1860,6 @@ class AppLocalizationsMr extends AppLocalizations {
   String get openSettings => 'सेटिंग्ज खोला';
 
   @override
-  String get wantDifferentName => 'अन्य काहीतरी नावाने जाऊ इच्छिता?';
-
-  @override
   String get whatsYourName => 'आपले नाव काय आहे?';
 
   @override

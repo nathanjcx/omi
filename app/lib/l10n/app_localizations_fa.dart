@@ -1858,9 +1858,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String get openSettings => 'باز کردن تنظیمات';
 
   @override
-  String get wantDifferentName => 'می‌خواهید به چیز دیگری نامیده شوید؟';
-
-  @override
   String get whatsYourName => 'نام شما چیست؟';
 
   @override

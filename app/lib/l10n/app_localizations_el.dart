@@ -1874,9 +1874,6 @@ class AppLocalizationsEl extends AppLocalizations {
   String get openSettings => 'Άνοιγμα Ρυθμίσεων';
 
   @override
-  String get wantDifferentName => 'Θέλετε να αποκαλείστε διαφορετικά;';
-
-  @override
   String get whatsYourName => 'Πώς σε λένε;';
 
   @override
