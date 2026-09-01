@@ -31,6 +31,10 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
   late AnimationController _questionAnimationController;
   late Animation<double> _questionFadeAnimation;
   SpeechProfileProvider? _speechProvider;
+  // Guards the pre-flight availability check itself, which runs before
+  // provider.isInitialising ever becomes true — without this, a rapid double
+  // tap during that network round-trip could start two concurrent sessions.
+  bool _isCheckingAvailability = false;
 
   @override
   void initState() {
@@ -339,18 +343,23 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
                           const SizedBox(height: 32),
 
                           // Get Started button
-                          provider.isInitialising
+                          (provider.isInitialising || _isCheckingAvailability)
                               ? const CircularProgressIndicator(color: Colors.white)
                               : SizedBox(
                                   width: double.infinity,
                                   height: 56,
                                   child: ElevatedButton(
                                     onPressed: () async {
+                                      if (_isCheckingAvailability) return;
+                                      setState(() => _isCheckingAvailability = true);
+
                                       // Pre-flight: don't enter the recording UI at all if
                                       // Deepgram is known down — otherwise the socket
                                       // connects and audio uploads, but no question/progress
                                       // ever arrives.
-                                      if (!await isDeepgramAvailable()) {
+                                      final available = await isDeepgramAvailable();
+                                      if (mounted) setState(() => _isCheckingAvailability = false);
+                                      if (!available) {
                                         if (!context.mounted) return;
                                         await showDialog(
                                           context: context,

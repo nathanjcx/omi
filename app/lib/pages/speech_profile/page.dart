@@ -36,6 +36,11 @@ class SpeechProfilePage extends StatefulWidget {
 class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProviderStateMixin {
   late AnimationController _questionAnimationController;
   late Animation<double> _questionFadeAnimation;
+  // Guards the pre-flight availability check itself, which runs before
+  // provider.isInitialising ever becomes true — without this, a rapid double
+  // tap on Redo/Get Started during that network round-trip could start two
+  // concurrent sessions.
+  bool _isCheckingAvailability = false;
 
   @override
   void initState() {
@@ -145,11 +150,16 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
     }
 
     Future<void> startRecording(SpeechProfileProvider provider) async {
+      if (_isCheckingAvailability) return;
+      setState(() => _isCheckingAvailability = true);
+
       // Pre-flight: don't enter the recording UI at all if Deepgram is known
       // down — otherwise the socket connects and audio uploads, but no
       // question/progress ever arrives (see STT_UNAVAILABLE handling below,
       // which only fires after already sitting in a dead recording screen).
-      if (!await isDeepgramAvailable()) {
+      final available = await isDeepgramAvailable();
+      if (mounted) setState(() => _isCheckingAvailability = false);
+      if (!available) {
         if (!context.mounted) return;
         await showDialog(
           context: context,
@@ -369,9 +379,7 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
                           Stack(
                             alignment: Alignment.center,
                             children: [
-                              if (provider.startedRecording &&
-                                  !provider.profileCompleted &&
-                                  !provider.uploadingProfile)
+                              if (provider.startedRecording && !provider.profileCompleted && !provider.uploadingProfile)
                                 // Mic feedback: a plain white glow behind the device
                                 // graphic that grows brighter/larger with mic level,
                                 // instead of a separate bar meter.
@@ -427,7 +435,7 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
                                 ),
                                 const SizedBox(height: 20),
                                 if (SharedPreferencesUtil().hasSpeakerProfile)
-                                  provider.isInitialising
+                                  (provider.isInitialising || _isCheckingAvailability)
                                       ? const CircularProgressIndicator(color: Colors.white)
                                       : Padding(
                                           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -508,7 +516,7 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
                           ? Column(
                               mainAxisAlignment: MainAxisAlignment.end,
                               children: [
-                                if (provider.isInitialising)
+                                if (provider.isInitialising || _isCheckingAvailability)
                                   const CircularProgressIndicator(color: Colors.white)
                                 else
                                   _capsuleButton(
@@ -536,80 +544,80 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
                               // apply yet.
                               ? const SizedBox.shrink()
                               : provider.profileCompleted
-                              ? Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                                  decoration: BoxDecoration(
-                                    border: const GradientBoxBorder(
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Color.fromARGB(127, 208, 208, 208),
-                                          Color.fromARGB(127, 188, 99, 121),
-                                          Color.fromARGB(127, 86, 101, 182),
-                                          Color.fromARGB(127, 126, 190, 236),
-                                        ],
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                      decoration: BoxDecoration(
+                                        border: const GradientBoxBorder(
+                                          gradient: LinearGradient(
+                                            colors: [
+                                              Color.fromARGB(127, 208, 208, 208),
+                                              Color.fromARGB(127, 188, 99, 121),
+                                              Color.fromARGB(127, 86, 101, 182),
+                                              Color.fromARGB(127, 126, 190, 236),
+                                            ],
+                                          ),
+                                          width: 2,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
                                       ),
-                                      width: 2,
-                                    ),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: TextButton(
-                                    onPressed: () {
-                                      // Conversation processing already triggered in finalize()
-                                      Navigator.pop(context);
-                                    },
-                                    child: Text(
-                                      context.l10n.allDone,
-                                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                                    ),
-                                  ),
-                                )
-                              : provider.uploadingProfile
-                                  ? const CircularProgressIndicator(
-                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white))
-                                  : Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const SizedBox(height: 8),
-                                        FadeTransition(
-                                          opacity: _questionFadeAnimation,
-                                          child: Text(
-                                            provider.currentQuestion,
-                                            style: const TextStyle(color: Colors.white, fontSize: 22, height: 1.3),
-                                            textAlign: TextAlign.center,
-                                          ),
+                                      child: TextButton(
+                                        onPressed: () {
+                                          // Conversation processing already triggered in finalize()
+                                          Navigator.pop(context);
+                                        },
+                                        child: Text(
+                                          context.l10n.allDone,
+                                          style: const TextStyle(color: Colors.white, fontSize: 16),
                                         ),
-                                        const SizedBox(height: 8),
-                                        SizedBox(
-                                          width: MediaQuery.sizeOf(context).width * 0.9,
-                                          child: ProgressBarWithPercentage(
-                                            progressValue: provider.questionProgress,
-                                            showPercentageAsPlainText: true,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        OutlinedButton(
-                                          onPressed: () => provider.skipCurrentQuestion(),
-                                          style: OutlinedButton.styleFrom(
-                                            side: const BorderSide(color: Colors.white),
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-                                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                                          ),
-                                          child: Text(
-                                            context.l10n.skipThisQuestion,
-                                            style: const TextStyle(color: Colors.white, fontSize: 14),
-                                          ),
-                                        ),
-                                        if (provider.device == null)
-                                          Padding(
-                                            padding: const EdgeInsets.only(top: 16),
-                                            child: Text(
-                                              context.l10n.noDeviceConnectedUseMic,
-                                              style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
-                                              textAlign: TextAlign.center,
+                                      ),
+                                    )
+                                  : provider.uploadingProfile
+                                      ? const CircularProgressIndicator(
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white))
+                                      : Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const SizedBox(height: 8),
+                                            FadeTransition(
+                                              opacity: _questionFadeAnimation,
+                                              child: Text(
+                                                provider.currentQuestion,
+                                                style: const TextStyle(color: Colors.white, fontSize: 22, height: 1.3),
+                                                textAlign: TextAlign.center,
+                                              ),
                                             ),
-                                          ),
-                                      ],
-                                    ),
+                                            const SizedBox(height: 8),
+                                            SizedBox(
+                                              width: MediaQuery.sizeOf(context).width * 0.9,
+                                              child: ProgressBarWithPercentage(
+                                                progressValue: provider.questionProgress,
+                                                showPercentageAsPlainText: true,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            OutlinedButton(
+                                              onPressed: () => provider.skipCurrentQuestion(),
+                                              style: OutlinedButton.styleFrom(
+                                                side: const BorderSide(color: Colors.white),
+                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+                                              ),
+                                              child: Text(
+                                                context.l10n.skipThisQuestion,
+                                                style: const TextStyle(color: Colors.white, fontSize: 14),
+                                              ),
+                                            ),
+                                            if (provider.device == null)
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 16),
+                                                child: Text(
+                                                  context.l10n.noDeviceConnectedUseMic,
+                                                  style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+                                                  textAlign: TextAlign.center,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
                     ),
                   ),
                 ],

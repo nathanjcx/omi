@@ -265,6 +265,47 @@ void main() {
     });
   });
 
+  // Regression coverage: close() left isInitialised and the STT-unavailable
+  // close count untouched, so a stale value from a previous session leaked
+  // into the next one — e.g. backing out of a freshly opened Settings page
+  // ran active-session cleanup it never started, or a new session tripped
+  // STT_UNAVAILABLE one 1011 close earlier than it should have.
+  group('close() resets state so a finished session cannot leak into the next', () {
+    test('resets isInitialised', () async {
+      final provider = SpeechProfileProvider();
+      provider.setInitialised(true);
+
+      await provider.close();
+
+      expect(provider.isInitialised, isFalse);
+      provider.dispose();
+    });
+
+    test('resets the STT-unavailable close count', () async {
+      final provider = _CountingSpeechProfileProvider();
+      provider.usePhoneMic = true;
+      provider.updateStartedRecording(true);
+
+      provider.onClosed(1011);
+      provider.onClosed(1011);
+      // Two strikes recorded, one away from tripping STT_UNAVAILABLE.
+
+      await provider.close();
+
+      provider.usePhoneMic = true;
+      provider.updateStartedRecording(true);
+      provider.onClosed(1011);
+
+      expect(
+        provider.error,
+        'SOCKET_DISCONNECTED',
+        reason: 'close() must reset the close count so a new session is not one 1011 away from STT_UNAVAILABLE',
+      );
+
+      provider.dispose();
+    });
+  });
+
   // Regression coverage: finalize()'s upload-failure branch commented "still
   // process conversation" but never set profileCompleted, so the "All Done"
   // continue button (gated on provider.profileCompleted in

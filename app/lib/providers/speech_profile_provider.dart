@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import 'package:flutter_provider_utilities/flutter_provider_utilities.dart';
+import 'package:opus_dart/opus_dart.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'package:omi/backend/http/api/speech_profile.dart';
@@ -96,18 +97,29 @@ class SpeechProfileProvider extends ChangeNotifier
   /// dependency, and it reflects the real audio being sent in production.
   double micLevel = 0.0;
   DateTime? _lastMicLevelNotify;
+  // Separate from audioStorage.opusDecoder: that one decodes the full
+  // recording once at finalize() time, this one decodes the same live frames
+  // independently (Opus packets decode independently of each other) purely
+  // for the meter, so neither interferes with the other.
+  SimpleOpusDecoder? _micLevelOpusDecoder;
 
   void _updateMicLevel(Uint8List bytes) {
     final sampleCount = bytes.length ~/ 2;
     if (sampleCount == 0) return;
 
     final byteData = ByteData.sublistView(bytes);
+    final samples = List<int>.generate(sampleCount, (i) => byteData.getInt16(i * 2, Endian.little));
+    _updateMicLevelFromSamples(samples);
+  }
+
+  void _updateMicLevelFromSamples(List<int> samples) {
+    if (samples.isEmpty) return;
+
     double sumSquares = 0;
-    for (int i = 0; i < sampleCount; i++) {
-      final sample = byteData.getInt16(i * 2, Endian.little);
+    for (final sample in samples) {
       sumSquares += sample * sample;
     }
-    final rms = sqrt(sumSquares / sampleCount);
+    final rms = sqrt(sumSquares / samples.length);
     // 16-bit PCM full-scale is 32768; normal speech rarely gets close to
     // that, so scale against a much lower reference to keep the meter
     // visibly responsive to a normal speaking voice, even a quiet one.
@@ -122,6 +134,34 @@ class SpeechProfileProvider extends ChangeNotifier
     if (_lastMicLevelNotify == null || now.difference(_lastMicLevelNotify!) > const Duration(milliseconds: 80)) {
       _lastMicLevelNotify = now;
       notifyListeners();
+    }
+  }
+
+  /// Feeds the mic-level meter from a connected device's audio frame
+  /// (post header-stripping). Omi devices default to Opus, which has to be
+  /// decoded before an amplitude can be computed at all — pcm16 needs no
+  /// decode. Other, rarer device codecs (pcm8/mulaw/aac/lc3) aren't decoded
+  /// live for this meter; the glow just stays at its idle level for those.
+  void _updateMicLevelFromDeviceFrame(List<int> frame) {
+    if (frame.isEmpty) return;
+    switch (audioStorage.codec) {
+      case BleAudioCodec.pcm16:
+        _updateMicLevel(Uint8List.fromList(frame));
+        break;
+      case BleAudioCodec.opus:
+      case BleAudioCodec.opusFS320:
+        try {
+          _micLevelOpusDecoder ??= SimpleOpusDecoder(sampleRate: 16000, channels: 1);
+          final decoded = _micLevelOpusDecoder!.decode(input: Uint8List.fromList(frame));
+          _updateMicLevelFromSamples(decoded);
+        } catch (e) {
+          // A dropped/out-of-order BLE packet can produce an undecodable
+          // frame; that's fine for a meter-only concern — just skip it.
+          Logger.debug('Speech profile: mic-level opus decode skipped: $e');
+        }
+        break;
+      default:
+        break;
     }
   }
 
@@ -452,6 +492,9 @@ class SpeechProfileProvider extends ChangeNotifier
         }
 
         final trimmedValue = paddingLeft > 0 ? value.sublist(paddingLeft) : value;
+
+        _updateMicLevelFromDeviceFrame(trimmedValue);
+
         if (_socket?.state == SocketServiceState.connected) {
           _socket?.send(trimmedValue);
         }
@@ -531,6 +574,8 @@ class SpeechProfileProvider extends ChangeNotifier
     usePhoneMic = false;
     _isOnboardingFlow = false;
     micLevel = 0.0;
+    isInitialised = false;
+    _sttUnavailableCloseCount = 0;
     _processConversationCallback = null;
 
     await _socket?.stop(reason: 'closing');
