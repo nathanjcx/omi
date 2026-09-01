@@ -24,9 +24,9 @@ Future<bool> userHasSpeakerProfile() async {
 }
 
 /// Pre-flight check before entering the recording UI, so a known-down
-/// Deepgram surfaces as an upfront error dialog instead of a dead recording
-/// screen with no questions/progress ever arriving.
-Future<bool> isDeepgramAvailable() async {
+/// streaming primary surfaces as an upfront error dialog instead of a dead
+/// recording screen with no questions/progress ever arriving.
+Future<bool> isSttAvailable() async {
   var response = await makeApiCall(
     url: '${Env.apiBaseUrl}v3/speech-profile/stt-availability',
     headers: {},
@@ -43,7 +43,7 @@ Future<bool> isDeepgramAvailable() async {
         jsonDecode(response.body) as Map<String, dynamic>,
       ).available;
     } catch (e) {
-      Logger.debug('Failed to parse isDeepgramAvailable response: $e');
+      Logger.debug('Failed to parse isSttAvailable response: $e');
       return true;
     }
   }

@@ -153,11 +153,11 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
       if (_isCheckingAvailability) return;
       setState(() => _isCheckingAvailability = true);
 
-      // Pre-flight: don't enter the recording UI at all if Deepgram is known
-      // down — otherwise the socket connects and audio uploads, but no
+      // Pre-flight: don't enter the recording UI at all if the streaming
+      // primary is known down — otherwise the socket connects and audio uploads, but no
       // question/progress ever arrives (see STT_UNAVAILABLE handling below,
       // which only fires after already sitting in a dead recording screen).
-      final available = await isDeepgramAvailable();
+      final available = await isSttAvailable();
       if (mounted) setState(() => _isCheckingAvailability = false);
       if (!available) {
         if (!context.mounted) return;
