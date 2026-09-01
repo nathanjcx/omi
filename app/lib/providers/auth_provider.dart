@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -143,7 +144,29 @@ class AuthenticationProvider extends BaseProvider {
       setLoadingState(true);
       try {
         UserCredential? credential;
-        if (PlatformService.isMobile && !useWebAuth) {
+        if (kDebugMode && useWebAuth) {
+          // LOCAL-DEV-ONLY BYPASS: skip the real OAuth/browser hop and sign
+          // straight into the Firebase Auth emulator with a throwaway
+          // email/password account, so local dev builds against the harness
+          // don't need real Google/Apple OAuth client config.
+          const devEmail = 'local-dev@omi.test';
+          const devPassword = 'omi-local-dev-bypass';
+          try {
+            credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+              email: devEmail,
+              password: devPassword,
+            );
+          } on FirebaseAuthException catch (e) {
+            if (e.code == 'user-not-found') {
+              credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+                email: devEmail,
+                password: devPassword,
+              );
+            } else {
+              rethrow;
+            }
+          }
+        } else if (PlatformService.isMobile && !useWebAuth) {
           credential = await AuthService.instance.signInWithGoogleMobile();
         } else {
           credential = await AuthService.instance.authenticateWithProvider('google');
