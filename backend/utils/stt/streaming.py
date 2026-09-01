@@ -117,9 +117,14 @@ def is_deepgram_available() -> bool:
     Reuses the existing per-process circuit breaker (a latency optimization,
     not a fleet-wide coordinator - see provider_resilience.py) rather than a
     new health check: false only while this process has the breaker open
-    after repeated recent Deepgram failures.
+    and its cooldown hasn't elapsed yet after repeated recent Deepgram
+    failures. Uses ``cooldown_elapsed()`` rather than raw ``state`` because
+    the open->half_open transition otherwise only happens inside
+    ``allow_request()`` — without this, a quiet process with no concurrent
+    listen traffic would stay reporting "unavailable" forever after Deepgram
+    actually recovered.
     """
-    return _deepgram_circuit.state != 'open'
+    return _deepgram_circuit.cooldown_elapsed()
 
 
 def _fallback_failure_reason(error: BaseException) -> str:

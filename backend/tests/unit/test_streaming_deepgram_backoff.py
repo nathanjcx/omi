@@ -1337,10 +1337,10 @@ class TestIsDeepgramAvailable:
     def test_unavailable_once_circuit_trips_open(self):
         from utils.stt.streaming import _deepgram_circuit, is_deepgram_available
 
-        # Loop generously past any reasonably configured failure_threshold
-        # (default 3, via DEEPGRAM_CIRCUIT_FAILURE_THRESHOLD) rather than
-        # assuming the exact count, since it's env-configurable.
-        for _ in range(20):
+        # DEEPGRAM_CIRCUIT_FAILURE_THRESHOLD is env-configurable; read the
+        # breaker's own configured threshold instead of assuming a count, so
+        # this can't flake against an env that sets it above a hardcoded loop.
+        for _ in range(_deepgram_circuit._failure_threshold):
             _deepgram_circuit.record_failure()
 
         assert is_deepgram_available() is False
@@ -1348,12 +1348,22 @@ class TestIsDeepgramAvailable:
     def test_available_again_after_recovery(self):
         from utils.stt.streaming import _deepgram_circuit, is_deepgram_available
 
-        # Loop generously past any reasonably configured failure_threshold
-        # (default 3, via DEEPGRAM_CIRCUIT_FAILURE_THRESHOLD) rather than
-        # assuming the exact count, since it's env-configurable.
-        for _ in range(20):
+        for _ in range(_deepgram_circuit._failure_threshold):
             _deepgram_circuit.record_failure()
         assert is_deepgram_available() is False
 
         _deepgram_circuit.record_success()
+        assert is_deepgram_available() is True
+
+    def test_unavailable_immediately_after_open_then_available_after_cooldown(self):
+        from utils.stt.streaming import _deepgram_circuit, is_deepgram_available
+
+        for _ in range(_deepgram_circuit._failure_threshold):
+            _deepgram_circuit.record_failure()
+        assert is_deepgram_available() is False
+
+        # No live-listen traffic has called allow_request() to flip
+        # open->half_open — is_deepgram_available() must still resolve this
+        # itself once the cooldown elapses, not stay stuck on stale state.
+        _deepgram_circuit._opened_at -= _deepgram_circuit._cooldown_seconds + 1
         assert is_deepgram_available() is True
