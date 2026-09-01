@@ -9925,4 +9925,7 @@ class AppLocalizationsEt extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Transkriptsioon ei saa heli';
 }

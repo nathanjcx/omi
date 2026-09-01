@@ -9940,4 +9940,7 @@ class AppLocalizationsMr extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'ट्रान्सक्रिप्शन ऑडिओ घेत नाही';
 }

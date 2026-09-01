@@ -9742,4 +9742,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => '转录未接收到音频';
 }

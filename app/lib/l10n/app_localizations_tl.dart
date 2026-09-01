@@ -10021,4 +10021,7 @@ class AppLocalizationsTl extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Hindi tumatanggap ng audio ang transkripsyon';
 }

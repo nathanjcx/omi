@@ -11758,5 +11758,9 @@
     "redo": "Redo",
     "@redo": {
         "description": "Label for the redo/re-record button on the speech profile page"
+    },
+    "transcriptionNoAudio": "Transcription not receiving audio",
+    "@transcriptionNoAudio": {
+        "description": "Status when an active call transcription socket receives no audio frames"
     }
 }

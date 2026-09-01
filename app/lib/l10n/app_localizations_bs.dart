@@ -9960,4 +9960,7 @@ class AppLocalizationsBs extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Transkripcija ne prima audio';
 }

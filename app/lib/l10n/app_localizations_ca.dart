@@ -9988,4 +9988,7 @@ class AppLocalizationsCa extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'La transcripció no rep àudio';
 }

@@ -9873,4 +9873,7 @@ class AppLocalizationsTh extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'การถอดเสียงไม่ได้รับเสียง';
 }

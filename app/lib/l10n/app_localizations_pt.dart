@@ -9940,4 +9940,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'A transcrição não está recebendo áudio';
 }

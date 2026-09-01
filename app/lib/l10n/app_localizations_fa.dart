@@ -9931,4 +9931,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'رونویسی صدا دریافت نمی‌کند';
 }

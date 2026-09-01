@@ -9932,4 +9932,7 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Transkriptio ei vastaanota ääntä';
 }

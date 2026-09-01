@@ -9932,4 +9932,7 @@ class AppLocalizationsCs extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Transkripce nepřijímá zvuk';
 }

@@ -9764,4 +9764,7 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => '전사가 오디오를 받지 못하고 있습니다';
 }

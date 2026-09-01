@@ -9972,4 +9972,7 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Az átírás nem kap hangot';
 }

@@ -9968,4 +9968,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Транскрипция не получает аудио';
 }

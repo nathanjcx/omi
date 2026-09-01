@@ -9761,4 +9761,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => '文字起こしが音声を受信していません';
 }

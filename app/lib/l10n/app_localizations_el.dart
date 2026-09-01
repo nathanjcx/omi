@@ -10001,4 +10001,7 @@ class AppLocalizationsEl extends AppLocalizations {
 
   @override
   String get redo => 'Redo';
+
+  @override
+  String get transcriptionNoAudio => 'Η μεταγραφή δεν λαμβάνει ήχο';
 }
