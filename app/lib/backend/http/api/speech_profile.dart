@@ -23,6 +23,32 @@ Future<bool> userHasSpeakerProfile() async {
   return true; // to avoid showing the banner if the request fails or there's no internet.
 }
 
+/// Pre-flight check before entering the recording UI, so a known-down
+/// Deepgram surfaces as an upfront error dialog instead of a dead recording
+/// screen with no questions/progress ever arriving.
+Future<bool> isDeepgramAvailable() async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v3/speech-profile/stt-availability',
+    headers: {},
+    method: 'GET',
+    body: '',
+  );
+  // Fail open: a hiccup on the check itself shouldn't block a working flow —
+  // the existing STT_UNAVAILABLE detection after repeated failed connects is
+  // still the real safety net.
+  if (response == null) return true;
+  if (response.statusCode == 200) {
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['available'] as bool? ?? true;
+    } catch (e) {
+      Logger.debug('Failed to parse isDeepgramAvailable response: $e');
+      return true;
+    }
+  }
+  return true;
+}
+
 Future<String?> getUserSpeechProfile() async {
   var response = await makeApiCall(url: '${Env.apiBaseUrl}v4/speech-profile', headers: {}, method: 'GET', body: '');
   if (response == null) return null;

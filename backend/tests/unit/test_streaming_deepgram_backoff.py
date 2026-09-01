@@ -1310,3 +1310,50 @@ class TestShouldPreserveFillerWords:
 
     def test_arabic_true(self):
         assert should_preserve_filler_words('ar') is True
+
+
+class TestIsDeepgramAvailable:
+    """is_deepgram_available() backs the speech-profile pre-flight check
+    (routers/speech_profile.py's /v3/speech-profile/stt-availability) that
+    keeps the client out of a dead recording screen when Deepgram is down.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_circuit(self):
+        # The breaker is a module-level singleton shared with real streaming
+        # code; leaving it open would poison unrelated tests/requests in the
+        # same process.
+        from utils.stt.streaming import _deepgram_circuit
+
+        _deepgram_circuit.record_success()
+        yield
+        _deepgram_circuit.record_success()
+
+    def test_available_when_circuit_closed(self):
+        from utils.stt.streaming import is_deepgram_available
+
+        assert is_deepgram_available() is True
+
+    def test_unavailable_once_circuit_trips_open(self):
+        from utils.stt.streaming import _deepgram_circuit, is_deepgram_available
+
+        # Loop generously past any reasonably configured failure_threshold
+        # (default 3, via DEEPGRAM_CIRCUIT_FAILURE_THRESHOLD) rather than
+        # assuming the exact count, since it's env-configurable.
+        for _ in range(20):
+            _deepgram_circuit.record_failure()
+
+        assert is_deepgram_available() is False
+
+    def test_available_again_after_recovery(self):
+        from utils.stt.streaming import _deepgram_circuit, is_deepgram_available
+
+        # Loop generously past any reasonably configured failure_threshold
+        # (default 3, via DEEPGRAM_CIRCUIT_FAILURE_THRESHOLD) rather than
+        # assuming the exact count, since it's env-configurable.
+        for _ in range(20):
+            _deepgram_circuit.record_failure()
+        assert is_deepgram_available() is False
+
+        _deepgram_circuit.record_success()
+        assert is_deepgram_available() is True

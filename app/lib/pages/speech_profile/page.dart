@@ -6,6 +6,7 @@ import 'package:flutter_provider_utilities/flutter_provider_utilities.dart';
 import 'package:gradient_borders/box_borders/gradient_box_border.dart';
 import 'package:provider/provider.dart';
 
+import 'package:omi/backend/http/api/speech_profile.dart';
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/bt_device/bt_device.dart';
 import 'package:omi/pages/home/page.dart';
@@ -144,6 +145,29 @@ class _SpeechProfilePageState extends State<SpeechProfilePage> with TickerProvid
     }
 
     Future<void> startRecording(SpeechProfileProvider provider) async {
+      // Pre-flight: don't enter the recording UI at all if Deepgram is known
+      // down — otherwise the socket connects and audio uploads, but no
+      // question/progress ever arrives (see STT_UNAVAILABLE handling below,
+      // which only fires after already sitting in a dead recording screen).
+      if (!await isDeepgramAvailable()) {
+        if (!context.mounted) return;
+        await showDialog(
+          context: context,
+          builder: (c) => getDialog(
+            context,
+            () => Navigator.pop(context),
+            () {},
+            context.l10n.connectionError,
+            context.l10n.connectionErrorDesc,
+            okButtonText: context.l10n.ok,
+            singleButton: true,
+          ),
+          barrierDismissible: false,
+        );
+        return;
+      }
+
+      if (!context.mounted) return;
       // Check if user has set primary language, if not, show dialog
       if (!context.read<HomeProvider>().hasSetPrimaryLanguage) {
         await LanguageSelectionDialog.show(context);

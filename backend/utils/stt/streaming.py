@@ -111,6 +111,17 @@ def _circuit_for_primary(primary_service: STTService) -> ProviderCircuitBreaker:
     raise ValueError(f'connection fallback is not defined for a {primary_service.value} primary')
 
 
+def is_deepgram_available() -> bool:
+    """Best-effort, process-local signal for a client pre-flight check.
+
+    Reuses the existing per-process circuit breaker (a latency optimization,
+    not a fleet-wide coordinator - see provider_resilience.py) rather than a
+    new health check: false only while this process has the breaker open
+    after repeated recent Deepgram failures.
+    """
+    return _deepgram_circuit.state != 'open'
+
+
 def _fallback_failure_reason(error: BaseException) -> str:
     """Classify why a fallback provider could not serve, for the next leg's telemetry."""
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):

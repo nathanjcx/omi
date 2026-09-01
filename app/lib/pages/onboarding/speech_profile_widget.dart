@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_provider_utilities/flutter_provider_utilities.dart';
 import 'package:provider/provider.dart';
 
+import 'package:omi/backend/http/api/speech_profile.dart';
 import 'package:omi/pages/settings/language_selection_dialog.dart';
 import 'package:omi/pages/speech_profile/mic_level_indicator.dart';
 import 'package:omi/pages/speech_profile/percentage_bar_progress.dart';
@@ -345,6 +346,29 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
                                   height: 56,
                                   child: ElevatedButton(
                                     onPressed: () async {
+                                      // Pre-flight: don't enter the recording UI at all if
+                                      // Deepgram is known down — otherwise the socket
+                                      // connects and audio uploads, but no question/progress
+                                      // ever arrives.
+                                      if (!await isDeepgramAvailable()) {
+                                        if (!context.mounted) return;
+                                        await showDialog(
+                                          context: context,
+                                          builder: (c) => getDialog(
+                                            context,
+                                            () => Navigator.pop(context),
+                                            () {},
+                                            context.l10n.connectionError,
+                                            context.l10n.connectionErrorDesc,
+                                            okButtonText: context.l10n.ok,
+                                            singleButton: true,
+                                          ),
+                                          barrierDismissible: false,
+                                        );
+                                        return;
+                                      }
+
+                                      if (!context.mounted) return;
                                       // Check if user has set primary language, if not, show dialog
                                       if (!context.read<HomeProvider>().hasSetPrimaryLanguage) {
                                         await LanguageSelectionDialog.show(context);
