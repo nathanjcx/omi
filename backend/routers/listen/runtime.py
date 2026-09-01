@@ -317,10 +317,11 @@ class ListenSessionRuntime:
             # claim onboarding provenance, so it never touches the completed-
             # account gate above — every account, onboarded or not, can always
             # redo their profile. OnboardingHandler mints its own session id
-            # (see utils/onboarding.py) when none is supplied, and leaving
-            # onboarding_session_id unset here correctly keeps any resulting
+            # (see utils/onboarding.py) when none is supplied, and explicitly
+            # clearing onboarding_session_id here keeps any resulting
             # conversation untagged as onboarding-provenance.
             self.onboarding_admitted = True
+            self.onboarding_session_id = None
         elif request.onboarding_mode:
             try:
                 admitted = await run_blocking(db_executor, user_db.ensure_backend_onboarding_admission, request.uid)
