@@ -53,7 +53,15 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _speechProvider ??= context.read<SpeechProfileProvider>();
+    // This now reads the shared app-root SpeechProfileProvider (see main.dart)
+    // rather than a fresh instance built just for onboarding, so a stale
+    // question/transcript/completed-profile from an earlier Settings-triggered
+    // recording (e.g. a prior account in the same app session) must be reset
+    // before this step is shown, not just on the Settings page's own entry.
+    if (_speechProvider == null) {
+      _speechProvider = context.read<SpeechProfileProvider>();
+      _speechProvider!.close();
+    }
   }
 
   @override

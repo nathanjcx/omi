@@ -85,6 +85,7 @@ class _CountingSpeechProfileProvider extends SpeechProfileProvider {
     required int sampleRate,
     required String language,
     required bool force,
+    bool speechProfileRedo = false,
   }) async {
     openCalls++;
     return TranscriptSegmentSocketService.withSocket(
