@@ -6,10 +6,12 @@ import 'package:flutter_provider_utilities/flutter_provider_utilities.dart';
 import 'package:provider/provider.dart';
 
 import 'package:omi/pages/settings/language_selection_dialog.dart';
+import 'package:omi/pages/speech_profile/mic_level_indicator.dart';
 import 'package:omi/pages/speech_profile/percentage_bar_progress.dart';
 import 'package:omi/providers/capture_provider.dart';
 import 'package:omi/providers/home_provider.dart';
 import 'package:omi/providers/speech_profile_provider.dart';
+import 'package:omi/utils/alerts/app_snackbar.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/widgets/dialog.dart';
@@ -134,6 +136,8 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
                 _questionAnimationController
                   ..reset()
                   ..forward();
+              } else if (info == 'SKIP_UNAVAILABLE') {
+                AppSnackbar.showSnackbarError(context.l10n.reconnecting);
               }
             },
             showError: (error) {
@@ -343,6 +347,7 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
                                       // Initialize speech profile with phone mic as input source
                                       bool success = await provider.initialise(
                                         usePhoneMic: true,
+                                        isOnboardingFlow: true,
                                         processConversationCallback: () {
                                           Provider.of<CaptureProvider>(
                                             context,
@@ -468,6 +473,12 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
 
                           const SizedBox(height: 8),
 
+                          // Mic level meter - visible confirmation the mic is
+                          // actually picking up the user's voice.
+                          MicLevelIndicator(level: provider.micLevel),
+
+                          const SizedBox(height: 8),
+
                           // Current question
                           FadeTransition(
                             opacity: _questionFadeAnimation,
@@ -489,7 +500,10 @@ class _SpeechProfileWidgetState extends State<SpeechProfileWidget> with TickerPr
                           // Progress bar
                           SizedBox(
                             width: double.infinity,
-                            child: ProgressBarWithPercentage(progressValue: provider.questionProgress),
+                            child: ProgressBarWithPercentage(
+                              progressValue: provider.questionProgress,
+                              showPercentageAsPlainText: true,
+                            ),
                           ),
 
                           const SizedBox(height: 8),

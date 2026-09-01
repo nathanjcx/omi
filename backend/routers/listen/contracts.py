@@ -35,6 +35,12 @@ class ListenRequest:
     source: Optional[str] = None
     custom_stt_mode: CustomSttMode = CustomSttMode.disabled
     onboarding_mode: bool = False
+    # A re-record of an *existing* speech profile from Settings, not a claim to
+    # onboarding provenance. Distinct from onboarding_mode (which still drives
+    # the same server-pushed question flow) so this can bypass the
+    # completed-account admission gate below without weakening it for real
+    # onboarding — see runtime.py's _bootstrap.
+    speech_profile_redo: bool = False
     speaker_auto_assign_enabled: bool = False
     create_speakers: bool = True
     vad_gate_override: Optional[str] = None

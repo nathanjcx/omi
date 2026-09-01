@@ -64,14 +64,10 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
   late Animation<double> _backgroundFadeAnimation;
   String _currentBackgroundImage = Assets.images.onboardingBg2.path;
   bool get hasSpeechProfile => SharedPreferencesUtil().hasSpeakerProfile;
-  SpeechProfileProvider? _speechProfileProvider;
   Future<void>? _knowledgeGraphPrebuildFuture;
 
   @override
   void initState() {
-    if (!widget.forceAuthPage) {
-      _speechProfileProvider = SpeechProfileProvider();
-    }
     _controller = TabController(
       length: 12,
       vsync: this,
@@ -132,7 +128,6 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
   void dispose() {
     _controller?.dispose();
     _backgroundAnimationController.dispose();
-    _speechProfileProvider?.dispose();
     super.dispose();
   }
 
@@ -345,18 +340,19 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
       Container(), // FindDevicesPage placeholder
       widget.forceAuthPage
           ? const SizedBox.shrink()
-          : ChangeNotifierProvider.value(
-              value: _speechProfileProvider!,
-              child: SpeechProfileWidget(
-                goNext: () {
-                  PlatformManager.instance.analytics.onboardingStepCompleted('Speech Profile');
-                  _controller!.animateTo(kKnowledgeGraphPage);
-                },
-                onSkip: () {
-                  PlatformManager.instance.analytics.onboardingStepCompleted('Speech Profile Skipped');
-                  _controller!.animateTo(kKnowledgeGraphPage);
-                },
-              ),
+          // Reuses the app-root SpeechProfileProvider (see main.dart) instead of a
+          // second, independently-constructed instance, so onboarding and the
+          // Settings speech profile page share one connection/recording state
+          // and setProviders(deviceProvider) actually gets called on it.
+          : SpeechProfileWidget(
+              goNext: () {
+                PlatformManager.instance.analytics.onboardingStepCompleted('Speech Profile');
+                _controller!.animateTo(kKnowledgeGraphPage);
+              },
+              onSkip: () {
+                PlatformManager.instance.analytics.onboardingStepCompleted('Speech Profile Skipped');
+                _controller!.animateTo(kKnowledgeGraphPage);
+              },
             ),
       OnboardingKnowledgeGraphStep(
         onContinue: () {
@@ -478,7 +474,7 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
                                 padding: EdgeInsets.zero,
                                 onPressed: () {
                                   if (_controller!.index == kSpeechProfilePage) {
-                                    _speechProfileProvider?.close();
+                                    context.read<SpeechProfileProvider>().close();
                                     _controller!.animateTo(kPermissionsPage);
                                   } else if (_controller!.index > kNamePage) {
                                     _controller!.animateTo(_controller!.index - 1);
@@ -560,7 +556,7 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
                                   padding: EdgeInsets.zero,
                                   onPressed: () {
                                     if (_controller!.index == kSpeechProfilePage) {
-                                      _speechProfileProvider?.close();
+                                      context.read<SpeechProfileProvider>().close();
                                       _controller!.animateTo(kPermissionsPage);
                                     } else if (_controller!.index > kNamePage) {
                                       _controller!.animateTo(_controller!.index - 1);

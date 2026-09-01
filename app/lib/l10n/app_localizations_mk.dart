@@ -9967,13 +9967,13 @@ class AppLocalizationsMk extends AppLocalizations {
   }
 
   @override
-  String shortConversationsCount(int count) {
-    String _temp0 = intl.Intl.pluralLogic(
-      count,
-      locale: localeName,
-      other: 'Кратки разговори: $count',
-      one: '$count краток разговор',
-    );
-    return '$_temp0';
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
   }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

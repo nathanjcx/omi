@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -77,15 +78,60 @@ class SpeechProfileProvider extends ChangeNotifier
 
   // Onboarding state (questions from server)
   bool usePhoneMic = false;
+  // True only for the real onboarding flow (see wrapper.dart), which claims
+  // onboarding provenance server-side. Every other caller (Settings' "redo
+  // speech profile") sends speech_profile_redo=enabled instead so an already-
+  // onboarded account still gets the question flow — see
+  // routers/listen/runtime.py's _bootstrap for why that distinction exists.
+  bool _isOnboardingFlow = false;
   String currentQuestion = '';
   int currentQuestionIndex = 0;
   int totalQuestions = 0;
 
   double get questionProgress => totalQuestions == 0 ? 0.0 : (currentQuestionIndex / totalQuestions).clamp(0.0, 1.0);
 
+  /// Live mic input level in [0.0, 1.0], computed straight from the outgoing
+  /// PCM16 audio so the recording UI can give the user visible confirmation
+  /// their voice is actually being picked up — no native amplitude API
+  /// dependency, and it reflects the real audio being sent in production.
+  double micLevel = 0.0;
+  DateTime? _lastMicLevelNotify;
+
+  void _updateMicLevel(Uint8List bytes) {
+    final sampleCount = bytes.length ~/ 2;
+    if (sampleCount == 0) return;
+
+    final byteData = ByteData.sublistView(bytes);
+    double sumSquares = 0;
+    for (int i = 0; i < sampleCount; i++) {
+      final sample = byteData.getInt16(i * 2, Endian.little);
+      sumSquares += sample * sample;
+    }
+    final rms = sqrt(sumSquares / sampleCount);
+    // 16-bit PCM full-scale is 32768; normal speech rarely gets close to
+    // that, so scale against a much lower reference to keep the meter
+    // visibly responsive to a normal speaking voice, even a quiet one.
+    final normalized = (rms / 1200).clamp(0.0, 1.0);
+    // Exponential smoothing so the bars don't flicker chunk to chunk, weighted
+    // toward the new sample so the meter still reacts quickly.
+    micLevel = micLevel * 0.5 + normalized * 0.5;
+
+    // Mic bytes arrive many times a second; throttle notifyListeners so this
+    // doesn't rebuild the whole page on every ~10ms audio chunk.
+    final now = DateTime.now();
+    if (_lastMicLevelNotify == null || now.difference(_lastMicLevelNotify!) > const Duration(milliseconds: 80)) {
+      _lastMicLevelNotify = now;
+      notifyListeners();
+    }
+  }
+
   void skipCurrentQuestion() {
     if (_socket?.state == SocketServiceState.connected) {
       _socket?.sendText('{"type": "skip_question"}');
+    } else {
+      // Previously a silent no-op while the socket was mid-reconnect (see
+      // _scheduleReconnect), so tapping Skip looked like it did nothing.
+      notifyInfo('SKIP_UNAVAILABLE');
     }
   }
 
@@ -121,11 +167,13 @@ class SpeechProfileProvider extends ChangeNotifier
     Function? finalizedCallback,
     Function? processConversationCallback,
     bool usePhoneMic = false,
+    bool isOnboardingFlow = false,
   }) async {
     _finalizedCallback = finalizedCallback;
     _processConversationCallback = processConversationCallback;
     setInitialising(true);
     this.usePhoneMic = usePhoneMic;
+    _isOnboardingFlow = isOnboardingFlow;
 
     try {
       if (usePhoneMic) {
@@ -186,7 +234,13 @@ class SpeechProfileProvider extends ChangeNotifier
         SharedPreferencesUtil().hasSetPrimaryLanguage ? SharedPreferencesUtil().userPrimaryLanguage : "multi";
     int rate = sampleRate ?? (codec.isOpusSupported() ? 16000 : 8000);
 
-    _socket = await openSpeechProfileSocket(codec: codec, sampleRate: rate, language: language, force: force);
+    _socket = await openSpeechProfileSocket(
+      codec: codec,
+      sampleRate: rate,
+      language: language,
+      force: force,
+      speechProfileRedo: !_isOnboardingFlow,
+    );
     if (_socket == null) {
       throw Exception("Can not create new speech profile socket");
     }
@@ -203,11 +257,13 @@ class SpeechProfileProvider extends ChangeNotifier
     required int sampleRate,
     required String language,
     required bool force,
+    bool speechProfileRedo = false,
   }) {
     return ServiceManager.instance().socket.speechProfile(
           codec: codec,
           sampleRate: sampleRate,
           language: language,
+          speechProfileRedo: speechProfileRedo,
           force: force,
         );
   }
@@ -234,6 +290,8 @@ class SpeechProfileProvider extends ChangeNotifier
 
           // Store audio frames for speech profile upload
           audioStorage.frames.add(bytes.toList());
+
+          _updateMicLevel(bytes);
 
           // Send to transcription socket
           if (_socket?.state == SocketServiceState.connected) {
@@ -471,6 +529,8 @@ class SpeechProfileProvider extends ChangeNotifier
     uploadingProfile = false;
     profileCompleted = false;
     usePhoneMic = false;
+    _isOnboardingFlow = false;
+    micLevel = 0.0;
     _processConversationCallback = null;
 
     await _socket?.stop(reason: 'closing');

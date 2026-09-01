@@ -312,7 +312,16 @@ class ListenSessionRuntime:
         # onboarding state more than the admission TTL ago — or never calls
         # the state endpoint at all — still gets a server-owned session, while
         # completed accounts can never re-enter onboarding provenance.
-        if request.onboarding_mode:
+        if request.onboarding_mode and request.speech_profile_redo:
+            # Re-recording an existing speech profile from Settings does not
+            # claim onboarding provenance, so it never touches the completed-
+            # account gate above — every account, onboarded or not, can always
+            # redo their profile. OnboardingHandler mints its own session id
+            # (see utils/onboarding.py) when none is supplied, and leaving
+            # onboarding_session_id unset here correctly keeps any resulting
+            # conversation untagged as onboarding-provenance.
+            self.onboarding_admitted = True
+        elif request.onboarding_mode:
             try:
                 admitted = await run_blocking(db_executor, user_db.ensure_backend_onboarding_admission, request.uid)
             except Exception as error:

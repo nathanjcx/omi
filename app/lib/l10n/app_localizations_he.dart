@@ -9835,13 +9835,13 @@ class AppLocalizationsHe extends AppLocalizations {
   }
 
   @override
-  String shortConversationsCount(int count) {
-    String _temp0 = intl.Intl.pluralLogic(
-      count,
-      locale: localeName,
-      other: 'שיחות קצרות: $count',
-      one: 'שיחה קצרה אחת',
-    );
-    return '$_temp0';
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
   }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

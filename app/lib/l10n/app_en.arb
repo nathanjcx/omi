@@ -1708,7 +1708,7 @@
     "@maybeLater": {
         "description": "Button text to defer action"
     },
-    "speechProfileIntro": "Omi needs to learn your goals and your voice. You'll be able to modify it later.",
+    "speechProfileIntro": "Let's set up your speech profile. You can always change it later",
     "@speechProfileIntro": {
         "description": "Introduction text for speech profile setup"
     },
@@ -6718,7 +6718,7 @@
     "@doItAgain": {
         "description": "Button text to redo speech profile"
     },
-    "listenToSpeechProfile": "Listen to my speech profile ➡️",
+    "listenToSpeechProfile": "Listen to my speech profile",
     "@listenToSpeechProfile": {
         "description": "Button text to listen to speech profile"
     },
@@ -11745,5 +11745,22 @@
                 "type": "int"
             }
         }
+    },
+    "speechProfileOwnerTitle": "{name}'s Speech Profile",
+    "@speechProfileOwnerTitle": {
+        "description": "Title shown on the speech profile page when the user already has a speech profile set up",
+        "placeholders": {
+            "name": {
+                "type": "String"
+            }
+        }
+    },
+    "play": "Play",
+    "@play": {
+        "description": "Label for the play/listen button on the speech profile page"
+    },
+    "redo": "Redo",
+    "@redo": {
+        "description": "Label for the redo/re-record button on the speech profile page"
     }
 }
