@@ -6,7 +6,7 @@
   "canonical_prevention_artifact": [
     "backend/tests/unit/test_listen_runtime_regressions.py"
   ],
-  "evidence_prs": [],
+  "evidence_prs": [12531],
   "scope_hints": ["backend/routers/listen/**", "backend/utils/stt/**"],
   "status": "open"
 }
