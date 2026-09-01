@@ -38,14 +38,18 @@ class _ProgressBarWithPercentageState extends State<ProgressBarWithPercentage> {
               return Row(
                 children: [
                   Expanded(
-                    child: SizedBox(
+                    child: Container(
                       height: 8,
-                      child: ClipRRect(
+                      decoration: BoxDecoration(
                         borderRadius: const BorderRadius.all(Radius.circular(10)),
+                        border: Border.all(color: Colors.white),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.all(Radius.circular(9)),
                         child: LinearProgressIndicator(
                           value: progress,
                           backgroundColor: Colors.grey.shade300,
-                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.deepPurple),
+                          valueColor: const AlwaysStoppedAnimation<Color>(Colors.black),
                         ),
                       ),
                     ),
@@ -79,15 +83,19 @@ class _ProgressBarWithPercentageState extends State<ProgressBarWithPercentage> {
                       ],
                     ),
                   ),
-                  SizedBox(
+                  Container(
                     width: barWidth,
                     height: 8,
-                    child: ClipRRect(
+                    decoration: BoxDecoration(
                       borderRadius: const BorderRadius.all(Radius.circular(10)),
+                      border: Border.all(color: Colors.white),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.all(Radius.circular(9)),
                       child: LinearProgressIndicator(
                         value: progress,
                         backgroundColor: Colors.grey.shade300,
-                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.deepPurple),
+                        valueColor: const AlwaysStoppedAnimation<Color>(Colors.black),
                       ),
                     ),
                   ),
