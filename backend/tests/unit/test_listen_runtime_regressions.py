@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from routers.listen.contracts import ListenRequest
+from routers.listen.conversations import resolve_onboarding_provenance_marker
 from routers.listen.runtime import ListenSessionRuntime
 from routers.listen.transcripts import TranscriptProcessor
 from utils.async_tasks import WebSocketTaskSupervisor
@@ -300,6 +301,9 @@ async def test_bootstrap_sends_first_onboarding_question_before_any_audio(monkey
     assert first_question['question_index'] == 0
     assert first_question['total_questions'] == len(ONBOARDING_QUESTIONS)
     assert enqueued_segments and enqueued_segments[0]['speaker_id'] == OnboardingHandler.OMI_SPEAKER_ID
+    # Real onboarding must still be tagged: the conversation-tagging seam
+    # reads the runtime's own admission id, which here is a real one.
+    assert resolve_onboarding_provenance_marker(runtime) == 'a' * 32
 
 
 @pytest.mark.anyio
@@ -369,9 +373,16 @@ async def test_bootstrap_admits_speech_profile_redo_despite_completed_onboarding
     await runtime.task_supervisor.drain_all(timeout=2.0, cancel=False)
 
     assert runtime.onboarding_admitted is True
-    # No provenance-tracked session id: this connection is not tagged as
-    # onboarding provenance (see routers/listen/conversations.py).
     assert runtime.onboarding_session_id is None
+    # OnboardingHandler still mints its own internal session id when none is
+    # supplied (it needs one for its own question/answer bookkeeping) — this
+    # asserts that fact so the next line's tagging check can't pass vacuously.
+    assert isinstance(runtime.onboarding_handler.session_id, str)
+    assert len(runtime.onboarding_handler.session_id) >= 16
+    # The conversation-tagging seam must read the runtime's own admission
+    # decision, not the handler's minted id, or every redo conversation would
+    # be re-tagged as onboarding provenance (see routers/listen/conversations.py).
+    assert resolve_onboarding_provenance_marker(runtime) is None
     assert [event['type'] for event in sent_events] == ['onboarding_question']
     assert enqueued_segments and enqueued_segments[0]['speaker_id'] == OnboardingHandler.OMI_SPEAKER_ID
 
