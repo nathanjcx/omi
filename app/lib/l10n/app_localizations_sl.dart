@@ -1859,9 +1859,6 @@ class AppLocalizationsSl extends AppLocalizations {
   String get openSettings => 'Odpri nastavitve';
 
   @override
-  String get wantDifferentName => 'Želite biti znani pod drugim imenom?';
-
-  @override
   String get whatsYourName => 'Kako se imenujete?';
 
   @override

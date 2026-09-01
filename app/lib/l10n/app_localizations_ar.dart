@@ -1844,9 +1844,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get openSettings => 'فتح الإعدادات';
 
   @override
-  String get wantDifferentName => 'تريد أن يُناديك باسم آخر؟';
-
-  @override
   String get whatsYourName => 'ما اسمك؟';
 
   @override

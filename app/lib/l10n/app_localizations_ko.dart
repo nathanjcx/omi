@@ -1825,9 +1825,6 @@ class AppLocalizationsKo extends AppLocalizations {
   String get openSettings => '설정 열기';
 
   @override
-  String get wantDifferentName => '다른 이름으로 부르시겠습니까?';
-
-  @override
   String get whatsYourName => '이름이 무엇인가요?';
 
   @override

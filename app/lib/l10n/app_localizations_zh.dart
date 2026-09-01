@@ -1823,9 +1823,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get openSettings => '打开设置';
 
   @override
-  String get wantDifferentName => '想用不同的名字？';
-
-  @override
   String get whatsYourName => '您叫什么名字？';
 
   @override

@@ -1849,9 +1849,6 @@ class AppLocalizationsEs extends AppLocalizations {
   String get openSettings => 'Abrir ajustes';
 
   @override
-  String get wantDifferentName => '¿Quieres usar un nombre diferente?';
-
-  @override
   String get whatsYourName => '¿Cómo te llamas?';
 
   @override

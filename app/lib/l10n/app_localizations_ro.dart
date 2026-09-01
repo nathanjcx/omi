@@ -1869,9 +1869,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String get openSettings => 'Deschide setările';
 
   @override
-  String get wantDifferentName => 'Vrei să folosești alt nume?';
-
-  @override
   String get whatsYourName => 'Cum te cheamă?';
 
   @override

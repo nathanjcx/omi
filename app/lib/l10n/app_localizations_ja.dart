@@ -1825,9 +1825,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get openSettings => '設定を開く';
 
   @override
-  String get wantDifferentName => '別の名前を使いますか？';
-
-  @override
   String get whatsYourName => 'お名前は何ですか？';
 
   @override

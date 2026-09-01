@@ -1867,9 +1867,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get openSettings => 'Открыть настройки';
 
   @override
-  String get wantDifferentName => 'Хотите использовать другое имя?';
-
-  @override
   String get whatsYourName => 'Как вас зовут?';
 
   @override

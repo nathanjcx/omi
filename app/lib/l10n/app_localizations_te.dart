@@ -1866,9 +1866,6 @@ class AppLocalizationsTe extends AppLocalizations {
   String get openSettings => 'సెట్టింగ్‌లను తెరండి';
 
   @override
-  String get wantDifferentName => 'వేరే పేరుతో వెళ్లాలనుకుంటున్నారా?';
-
-  @override
   String get whatsYourName => 'మీ పేరు ఏమిటి?';
 
   @override

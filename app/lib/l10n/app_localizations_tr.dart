@@ -1864,9 +1864,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get openSettings => 'Ayarları Aç';
 
   @override
-  String get wantDifferentName => 'Farklı bir isimle mi anılmak istiyorsunuz?';
-
-  @override
   String get whatsYourName => 'Adın ne?';
 
   @override

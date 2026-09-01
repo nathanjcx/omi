@@ -1863,9 +1863,6 @@ class AppLocalizationsId extends AppLocalizations {
   String get openSettings => 'Buka Pengaturan';
 
   @override
-  String get wantDifferentName => 'Ingin menggunakan nama lain?';
-
-  @override
   String get whatsYourName => 'Siapa nama Anda?';
 
   @override

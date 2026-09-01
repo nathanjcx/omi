@@ -1857,9 +1857,6 @@ class AppLocalizationsBn extends AppLocalizations {
   String get openSettings => 'সেটিংস খুলুন';
 
   @override
-  String get wantDifferentName => 'অন্য কিছু নাম পেতে চান?';
-
-  @override
   String get whatsYourName => 'আপনার নাম কি?';
 
   @override

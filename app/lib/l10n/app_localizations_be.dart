@@ -1862,9 +1862,6 @@ class AppLocalizationsBe extends AppLocalizations {
   String get openSettings => 'Адкрыць налады';
 
   @override
-  String get wantDifferentName => 'Хочаце быць вядомамі пад чым-то іншым?';
-
-  @override
   String get whatsYourName => 'Якое вашае імя?';
 
   @override

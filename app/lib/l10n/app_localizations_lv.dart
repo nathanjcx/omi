@@ -1863,9 +1863,6 @@ class AppLocalizationsLv extends AppLocalizations {
   String get openSettings => 'Atvērt iestatījumus';
 
   @override
-  String get wantDifferentName => 'Vēlaties, lai jūs uzrunā citādi?';
-
-  @override
   String get whatsYourName => 'Kā tevi sauc?';
 
   @override

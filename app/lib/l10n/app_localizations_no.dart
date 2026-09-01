@@ -1858,9 +1858,6 @@ class AppLocalizationsNo extends AppLocalizations {
   String get openSettings => 'Åpne innstillinger';
 
   @override
-  String get wantDifferentName => 'Vil du bli kalt noe annet?';
-
-  @override
   String get whatsYourName => 'Hva heter du?';
 
   @override

@@ -1839,9 +1839,6 @@ class AppLocalizationsHi extends AppLocalizations {
   String get openSettings => 'सेटिंग्स खोलें';
 
   @override
-  String get wantDifferentName => 'क्या आप कोई दूसरा नाम इस्तेमाल करना चाहते हैं?';
-
-  @override
   String get whatsYourName => 'आपका नाम क्या है?';
 
   @override

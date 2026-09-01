@@ -1870,9 +1870,6 @@ class AppLocalizationsTl extends AppLocalizations {
   String get openSettings => 'Buksan ang Settings';
 
   @override
-  String get wantDifferentName => 'Gusto mo bang gamitin ang ibang pangalan?';
-
-  @override
   String get whatsYourName => 'Ano ang iyong pangalan?';
 
   @override

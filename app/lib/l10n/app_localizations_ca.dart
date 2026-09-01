@@ -1872,9 +1872,6 @@ class AppLocalizationsCa extends AppLocalizations {
   String get openSettings => 'Obrir configuració';
 
   @override
-  String get wantDifferentName => 'Voleu que us anomeni d\'una altra manera?';
-
-  @override
   String get whatsYourName => 'Com et dius?';
 
   @override

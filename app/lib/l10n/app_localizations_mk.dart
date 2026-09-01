@@ -1866,9 +1866,6 @@ class AppLocalizationsMk extends AppLocalizations {
   String get openSettings => 'Отворете поставки';
 
   @override
-  String get wantDifferentName => 'Сакате да использите некое друго име?';
-
-  @override
   String get whatsYourName => 'Кое е вашето име?';
 
   @override

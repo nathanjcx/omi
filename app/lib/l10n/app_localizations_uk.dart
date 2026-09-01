@@ -1862,9 +1862,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get openSettings => 'Відкрити налаштування';
 
   @override
-  String get wantDifferentName => 'Хочете, щоб до вас звертались інакше?';
-
-  @override
   String get whatsYourName => 'Як вас звати?';
 
   @override

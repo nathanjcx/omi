@@ -1849,9 +1849,6 @@ class AppLocalizationsTh extends AppLocalizations {
   String get openSettings => 'เปิดการตั้งค่า';
 
   @override
-  String get wantDifferentName => 'ต้องการใช้ชื่ออื่นไหม?';
-
-  @override
   String get whatsYourName => 'คุณชื่ออะไร?';
 
   @override
