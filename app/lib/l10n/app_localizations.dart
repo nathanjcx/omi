@@ -18447,12 +18447,6 @@ abstract class AppLocalizations {
   /// **'Not captured ({count})'**
   String conversationsNotCapturedCount(int count);
 
-  /// Collapsed group of the day’s short conversations on the home timeline
-  ///
-  /// In en, this message translates to:
-  /// **'{count, plural, =1{{count} short conversation} other{{count} short conversations}}'**
-  String shortConversationsCount(int count);
-
   /// Title shown on the speech profile page when the user already has a speech profile set up
   ///
   /// In en, this message translates to:
