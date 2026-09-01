@@ -414,8 +414,12 @@ class _OnboardingWrapperState extends State<OnboardingWrapper> with TickerProvid
                     _controller!.index == kCompletePage
                 ? Stack(
                     children: [
-                      // Animated background image (skip for welcome and complete pages)
-                      if (_controller!.index != kWelcomePage && _controller!.index != kCompletePage)
+                      // Animated background image (skip for welcome, complete, and speech
+                      // profile pages — the speech profile step shows the Omi device
+                      // graphic with a mic-level glow instead, matching the Settings redo page).
+                      if (_controller!.index != kWelcomePage &&
+                          _controller!.index != kCompletePage &&
+                          _controller!.index != kSpeechProfilePage)
                         FadeTransition(
                           opacity: _backgroundFadeAnimation,
                           child: Container(
