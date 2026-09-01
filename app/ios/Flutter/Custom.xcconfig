@@ -1,7 +1,3 @@
 // This is a generated file; do not edit or check into version control.
-GOOGLE_REVERSE_CLIENT_ID=
-APP_BUNDLE_IDENTIFIER=com.friend-app-with-wearable.ios12-nathansmbp
-DEVELOPMENT_TEAM=9536L8KLMP
-CODE_SIGN_STYLE=Manual
-CODE_SIGN_IDENTITY=Apple Development: Created via API (NCUA3B2WZP)
-PROVISIONING_PROFILE_SPECIFIER=match Development com.friend-app-with-wearable.ios12.development
+GOOGLE_REVERSE_CLIENT_ID=com.googleusercontent.apps.1031333818730-dusn243nct6i5rgfpfkj5mchuj1qnmde
+APP_BUNDLE_IDENTIFIER=com.friend-app-with-wearable.ios12
