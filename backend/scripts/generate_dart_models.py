@@ -215,6 +215,7 @@ SCHEMA_GROUPS = {
             'SpeechProfileResponse',
             'SpeechProfileUploadResponse',
             'SpeechProfileMutationResponse',
+            'SttAvailabilityResponse',
         ),
         'operation_wrappers': (
             (

@@ -39,8 +39,9 @@ Future<bool> isDeepgramAvailable() async {
   if (response == null) return true;
   if (response.statusCode == 200) {
     try {
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      return data['available'] as bool? ?? true;
+      return wire.GeneratedSttAvailabilityResponse.fromJson(
+        jsonDecode(response.body) as Map<String, dynamic>,
+      ).available;
     } catch (e) {
       Logger.debug('Failed to parse isDeepgramAvailable response: $e');
       return true;
