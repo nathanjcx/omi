@@ -1862,9 +1862,6 @@ class AppLocalizationsSr extends AppLocalizations {
   String get openSettings => 'Отвори подешавања';
 
   @override
-  String get wantDifferentName => 'Желиш да идеш под неким другим именом?';
-
-  @override
   String get whatsYourName => 'Како се зовеш?';
 
   @override
@@ -7844,7 +7841,7 @@ class AppLocalizationsSr extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google претрага';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Аудио датотека није доступна за пуштање';
@@ -9942,4 +9939,15 @@ class AppLocalizationsSr extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

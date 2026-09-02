@@ -1875,9 +1875,6 @@ class AppLocalizationsCa extends AppLocalizations {
   String get openSettings => 'Obrir configuració';
 
   @override
-  String get wantDifferentName => 'Voleu que us anomeni d\'una altra manera?';
-
-  @override
   String get whatsYourName => 'Com et dius?';
 
   @override
@@ -7878,7 +7875,7 @@ class AppLocalizationsCa extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'El fitxer d\'àudio no està disponible per a la reproducció';
@@ -9983,4 +9980,15 @@ class AppLocalizationsCa extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

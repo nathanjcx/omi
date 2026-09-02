@@ -1867,9 +1867,6 @@ class AppLocalizationsSk extends AppLocalizations {
   String get openSettings => 'Otvoriť nastavenia';
 
   @override
-  String get wantDifferentName => 'Chcete sa volať inak?';
-
-  @override
   String get whatsYourName => 'Ako sa voláš?';
 
   @override
@@ -7823,7 +7820,7 @@ class AppLocalizationsSk extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Zvukový súbor nie je k dispozícii na prehrávanie';
@@ -9919,4 +9916,15 @@ class AppLocalizationsSk extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

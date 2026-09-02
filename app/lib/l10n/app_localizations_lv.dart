@@ -1866,9 +1866,6 @@ class AppLocalizationsLv extends AppLocalizations {
   String get openSettings => 'Atvērt iestatījumus';
 
   @override
-  String get wantDifferentName => 'Vēlaties, lai jūs uzrunā citādi?';
-
-  @override
   String get whatsYourName => 'Kā tevi sauc?';
 
   @override
@@ -7850,7 +7847,7 @@ class AppLocalizationsLv extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Audio fails nav pieejams atskaņošanai';
@@ -9950,4 +9947,15 @@ class AppLocalizationsLv extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

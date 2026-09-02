@@ -3504,7 +3504,7 @@ abstract class AppLocalizations {
   /// Introduction text for speech profile setup
   ///
   /// In en, this message translates to:
-  /// **'Omi needs to learn your goals and your voice. You\'ll be able to modify it later.'**
+  /// **'Let\'s set up your speech profile. You can always change it later'**
   String get speechProfileIntro;
 
   /// Button text to begin a process
@@ -3638,12 +3638,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Open Settings'**
   String get openSettings;
-
-  /// Question asking if user wants to change their display name
-  ///
-  /// In en, this message translates to:
-  /// **'What is your name?'**
-  String get wantDifferentName;
 
   /// Question asking for user's name
   ///
@@ -14664,7 +14658,7 @@ abstract class AppLocalizations {
   /// No description provided for @googleSearch.
   ///
   /// In en, this message translates to:
-  /// **'Google Search'**
+  /// **'Google'**
   String get googleSearch;
 
   /// No description provided for @audioPlaybackUnavailable.
@@ -18464,6 +18458,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{count, plural, =1{{count} short conversation} other{{count} short conversations}}'**
   String shortConversationsCount(int count);
+
+  /// Title shown on the speech profile page when the user already has a speech profile set up
+  ///
+  /// In en, this message translates to:
+  /// **'{name}\'s Speech Profile'**
+  String speechProfileOwnerTitle(String name);
+
+  /// Label for the play/listen button on the speech profile page
+  ///
+  /// In en, this message translates to:
+  /// **'Play'**
+  String get play;
+
+  /// Label for the redo/re-record button on the speech profile page
+  ///
+  /// In en, this message translates to:
+  /// **'Redo'**
+  String get redo;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

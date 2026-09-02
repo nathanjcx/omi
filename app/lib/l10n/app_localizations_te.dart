@@ -1869,9 +1869,6 @@ class AppLocalizationsTe extends AppLocalizations {
   String get openSettings => 'సెట్టింగ్‌లను తెరండి';
 
   @override
-  String get wantDifferentName => 'వేరే పేరుతో వెళ్లాలనుకుంటున్నారా?';
-
-  @override
   String get whatsYourName => 'మీ పేరు ఏమిటి?';
 
   @override
@@ -7877,7 +7874,7 @@ class AppLocalizationsTe extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google శోధన';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'ఆడియో ఫైల్ ప్లేబ్యాక్ కోసం అందుబాటులో లేదు';
@@ -9975,4 +9972,15 @@ class AppLocalizationsTe extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

@@ -1861,9 +1861,6 @@ class AppLocalizationsLt extends AppLocalizations {
   String get openSettings => 'Atidaryti nustatymus';
 
   @override
-  String get wantDifferentName => 'Norite, kad jus vadintų kitaip?';
-
-  @override
   String get whatsYourName => 'Koks tavo vardas?';
 
   @override
@@ -7839,7 +7836,7 @@ class AppLocalizationsLt extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Garso failas nepasiekiamas atkūrimui';
@@ -9946,4 +9943,15 @@ class AppLocalizationsLt extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

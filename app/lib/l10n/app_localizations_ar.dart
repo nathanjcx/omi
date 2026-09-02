@@ -1847,9 +1847,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get openSettings => 'فتح الإعدادات';
 
   @override
-  String get wantDifferentName => 'تريد أن يُناديك باسم آخر؟';
-
-  @override
   String get whatsYourName => 'ما اسمك؟';
 
   @override
@@ -7778,7 +7775,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'ملف الصوت غير متاح للتشغيل';
@@ -9868,4 +9865,15 @@ class AppLocalizationsAr extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

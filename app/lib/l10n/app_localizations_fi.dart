@@ -1860,9 +1860,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get openSettings => 'Avaa asetukset';
 
   @override
-  String get wantDifferentName => 'Haluatko käyttää eri nimeä?';
-
-  @override
   String get whatsYourName => 'Mikä on nimesi?';
 
   @override
@@ -7831,7 +7828,7 @@ class AppLocalizationsFi extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Äänitiedosto ei ole saatavilla toistettavaksi';
@@ -9927,4 +9924,15 @@ class AppLocalizationsFi extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

@@ -1875,9 +1875,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get openSettings => 'Beállítások megnyitása';
 
   @override
-  String get wantDifferentName => 'Máshogy szeretnéd, hogy hívjanak?';
-
-  @override
   String get whatsYourName => 'Mi a neved?';
 
   @override
@@ -7867,7 +7864,7 @@ class AppLocalizationsHu extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'A hangfájl nem érhető el lejátszásra';
@@ -9967,4 +9964,15 @@ class AppLocalizationsHu extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

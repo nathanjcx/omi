@@ -1866,9 +1866,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get openSettings => 'Mở cài đặt';
 
   @override
-  String get wantDifferentName => 'Muốn được gọi bằng tên khác?';
-
-  @override
   String get whatsYourName => 'Tên bạn là gì?';
 
   @override
@@ -7833,7 +7830,7 @@ class AppLocalizationsVi extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Tệp âm thanh không khả dụng để phát';
@@ -9920,4 +9917,15 @@ class AppLocalizationsVi extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

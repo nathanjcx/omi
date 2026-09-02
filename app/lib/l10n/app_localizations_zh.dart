@@ -1826,9 +1826,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get openSettings => '打开设置';
 
   @override
-  String get wantDifferentName => '想用不同的名字？';
-
-  @override
   String get whatsYourName => '您叫什么名字？';
 
   @override
@@ -7697,7 +7694,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => '音频文件无法播放';
@@ -9737,4 +9734,15 @@ class AppLocalizationsZh extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

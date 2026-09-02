@@ -1864,9 +1864,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get openSettings => 'Öppna inställningar';
 
   @override
-  String get wantDifferentName => 'Vill du kallas något annat?';
-
-  @override
   String get whatsYourName => 'Vad heter du?';
 
   @override
@@ -7837,7 +7834,7 @@ class AppLocalizationsSv extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => 'Ljudfilen är inte tillgänglig för uppspelning';
@@ -9930,4 +9927,15 @@ class AppLocalizationsSv extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }

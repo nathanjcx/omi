@@ -1828,9 +1828,6 @@ class AppLocalizationsKo extends AppLocalizations {
   String get openSettings => '설정 열기';
 
   @override
-  String get wantDifferentName => '다른 이름으로 부르시겠습니까?';
-
-  @override
   String get whatsYourName => '이름이 무엇인가요?';
 
   @override
@@ -7708,7 +7705,7 @@ class AppLocalizationsKo extends AppLocalizations {
   String get appStore => 'App Store';
 
   @override
-  String get googleSearch => 'Google Search';
+  String get googleSearch => 'Google';
 
   @override
   String get audioPlaybackUnavailable => '오디오 파일을 재생할 수 없습니다';
@@ -9759,4 +9756,15 @@ class AppLocalizationsKo extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String speechProfileOwnerTitle(String name) {
+    return '$name\'s Speech Profile';
+  }
+
+  @override
+  String get play => 'Play';
+
+  @override
+  String get redo => 'Redo';
 }
