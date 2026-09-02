@@ -2573,14 +2573,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get serverProcessesAudio => 'The server processes the audio files and creates memories';
 
   @override
-  String get youreAllSet => 'You\'re all set!';
+  String get youreAllSet => 'You are all set';
 
   @override
   String get welcomeToOmiDescription =>
       'Welcome to Omi! Your AI companion is ready to assist you with conversations, tasks, and more.';
 
   @override
-  String get startUsingOmi => 'Start Using Omi';
+  String get startUsingOmi => 'Start using Omi';
 
   @override
   String get back => 'Back';
@@ -7997,7 +7997,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appIconLabel => 'App Icon';
 
   @override
-  String get onboardingWhatIKnowAboutYouTitle => 'Here is what I know about you';
+  String get onboardingWhatIKnowAboutYouTitle => 'Here is what I know about you.';
 
   @override
   String get onboardingWhatIKnowAboutYouDescription => 'This map updates as Omi learns from your conversations.';
