@@ -9960,4 +9960,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'Транскрипция не получает аудио';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

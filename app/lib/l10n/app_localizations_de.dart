@@ -10006,4 +10006,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'Transkription empfängt kein Audio';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

@@ -9735,4 +9735,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => '转录未接收到音频';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

@@ -9993,4 +9993,7 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'நகலெடுப்பு ஆடியோவைப் பெறவில்லை';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

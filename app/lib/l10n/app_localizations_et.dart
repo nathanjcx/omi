@@ -9917,4 +9917,7 @@ class AppLocalizationsEt extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'Transkriptsioon ei saa heli';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

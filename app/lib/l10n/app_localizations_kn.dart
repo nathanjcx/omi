@@ -9955,4 +9955,7 @@ class AppLocalizationsKn extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'ಲಿಪ್ಯಂತರಣ ಆಡಿಯೊ ಸ್ವೀಕರಿಸುತ್ತಿಲ್ಲ';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

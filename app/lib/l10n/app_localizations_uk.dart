@@ -9945,4 +9945,7 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'Транскрипція не отримує аудіо';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

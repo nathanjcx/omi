@@ -9980,4 +9980,7 @@ class AppLocalizationsCa extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'La transcripció no rep àudio';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

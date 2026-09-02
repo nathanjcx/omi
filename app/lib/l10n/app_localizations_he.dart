@@ -9844,4 +9844,7 @@ class AppLocalizationsHe extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'התמליל אינו מקבל שמע';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

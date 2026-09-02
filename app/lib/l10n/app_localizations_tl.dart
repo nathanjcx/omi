@@ -10014,4 +10014,7 @@ class AppLocalizationsTl extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'Hindi tumatanggap ng audio ang transkripsyon';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }

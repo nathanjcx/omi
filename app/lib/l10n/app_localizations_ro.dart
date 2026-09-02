@@ -9970,4 +9970,7 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get transcriptionNoAudio => 'Transcrierea nu primește audio';
+
+  @override
+  String get tapPlusToStartRecording => 'Tap + to start recording';
 }
