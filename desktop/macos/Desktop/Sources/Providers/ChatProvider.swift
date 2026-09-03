@@ -4361,6 +4361,14 @@ class ChatProvider: ObservableObject {
   ) async -> String? {
     let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmedText.isEmpty || questionInteraction != nil || questionContinuation != nil else { return nil }
+
+    // Super Mode answers instead, from the screen alone. See `ChatProvider+SuperMode`.
+    if SuperModeController.shared.isOn, Self.superModeAnswers(turnOwner) {
+      onAccepted?()
+      return await answerWithSuperMode(
+        trimmedText, clientTurnId: clientTurnId, turnOwner: turnOwner)
+    }
+
     var effectivePrompt = trimmedText
 
     // Guard against concurrent sendMessage calls.

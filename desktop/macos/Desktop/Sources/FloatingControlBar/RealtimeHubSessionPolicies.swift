@@ -67,12 +67,20 @@ enum RealtimeProviderOutputPresentationPolicy {
     case present
     case suppressScreenGrounding
     case suppressReducerOwnedOutput
+    case suppressSuperModeOwnsAnswer
   }
 
   static func decide(
     screenGroundingState: RealtimeScreenGroundingState,
-    reducerOutputSuppressed: Bool
+    reducerOutputSuppressed: Bool,
+    superModeOwnsAnswer: Bool = false
   ) -> Disposition {
+    // First, because it is the only reason that is a *product* decision rather than a transport one:
+    // while Super Mode is on the hub is being used to hear the user, and something else is going to
+    // answer. Two voices answering one question is the failure this ordering prevents.
+    if superModeOwnsAnswer {
+      return .suppressSuperModeOwnsAnswer
+    }
     if screenGroundingState.suppressesProviderOutput {
       return .suppressScreenGrounding
     }

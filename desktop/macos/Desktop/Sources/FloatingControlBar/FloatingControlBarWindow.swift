@@ -2811,6 +2811,9 @@ class FloatingControlBarManager {
   private var durationCancellable: AnyCancellable?
   private var chatCancellable: AnyCancellable?
   private var historyChatProvider: ChatProvider?
+  /// The client turn id of the Super Mode voice exchange currently being streamed, so successive
+  /// fragments grow one reply instead of appending a message each. Cleared when the turn closes.
+  private var superModeVoiceTurnId: String?
 
   /// Public read-only access to the floating bar's chat provider so the
   /// agent pills manager can inherit the working directory / model.
@@ -4985,6 +4988,74 @@ class FloatingControlBarManager {
 
   private func activeFloatingProvider() -> ChatProvider? {
     historyChatProvider
+  }
+
+  /// Delivers a Super Mode answer to a spoken question: into the transcript so it can be read, and
+  /// out of the speaker so it can be heard, which is what a voice turn is for.
+  ///
+  /// It does not go back through `routeQuery`. That path exists to *produce* an answer from the
+  /// kernel, and this answer already exists — re-entering it would open a second turn, and Super
+  /// Mode would answer the same question twice on the user's own key. The exchange is appended the
+  /// same way `ChatProvider` appends a typed Super Mode turn: rendered, never journaled, never
+  /// synced — a Super Mode answer belongs to the session that asked for it.
+  ///
+  /// The pair `streamSuperModeVoiceAnswer` / `presentSuperModeVoiceAnswer` is one exchange written
+  /// once and then grown: the first fragment creates it, later fragments extend it, and the final
+  /// call closes it. Speech starts on the partial text rather than on the completed answer, which is
+  /// the same reason the request streams at all.
+  func streamSuperModeVoiceAnswer(question: String, fragment: String) {
+    guard let provider = activeFloatingProvider() else { return }
+    let index = superModeVoiceReplyIndex(in: provider, question: question)
+    provider.messages[index].text += fragment
+    // `SuperModeVoice`, not the shared playback service: that one synthesizes with OpenAI TTS in the
+    // user's chosen Settings voice, which is a different voice from the one the hub speaks in — see
+    // `SuperModeVoice` for why that made Super Mode sound like a different assistant.
+    if ShortcutSettings.shared.shouldSpeakFloatingBarResponse(forVoiceQuery: true) {
+      SuperModeVoice.shared.speak(fragment)
+    }
+  }
+
+  func presentSuperModeVoiceAnswer(question: String, answer: String) {
+    guard let provider = activeFloatingProvider() else { return }
+    let index = superModeVoiceReplyIndex(in: provider, question: question)
+    // Assign rather than append: an error answer never streamed, so whatever accumulated is either
+    // exactly this string or nothing at all.
+    let alreadyStreamed = provider.messages[index].text
+    provider.messages[index].text = answer
+    provider.messages[index].isStreaming = false
+    if ShortcutSettings.shared.shouldSpeakFloatingBarResponse(forVoiceQuery: true) {
+      // An answer that failed never streamed a fragment, so nothing has been spoken yet and the
+      // whole text still has to go to the voice. One that did stream must only flush its tail —
+      // handing the full answer over again would speak every sentence twice.
+      if alreadyStreamed.isEmpty { SuperModeVoice.shared.speak(answer) }
+      SuperModeVoice.shared.finish()
+    }
+    superModeVoiceTurnId = nil
+  }
+
+  /// The index of the reply being grown, creating the question/answer pair on first use. Bound by
+  /// client turn id rather than by position, because anything else in the app may append to the
+  /// transcript between two fragments.
+  private func superModeVoiceReplyIndex(in provider: ChatProvider, question: String) -> Int {
+    if superModeVoiceTurnId == nil {
+      // A new spoken answer supersedes whatever the last one was still saying.
+      SuperModeVoice.shared.stop()
+    }
+    if let turnId = superModeVoiceTurnId,
+      let index = provider.messages.lastIndex(where: {
+        $0.clientTurnId == turnId && $0.sender == .ai
+      })
+    {
+      return index
+    }
+    let turnId = UUID().uuidString
+    superModeVoiceTurnId = turnId
+    provider.messages.append(
+      ChatMessage(clientTurnId: turnId, text: question, sender: .user, turnOwner: .floatingVoice))
+    provider.messages.append(
+      ChatMessage(
+        clientTurnId: turnId, text: "", sender: .ai, isStreaming: true, turnOwner: .floatingVoice))
+    return provider.messages.count - 1
   }
 
   private func deliverAgentArtifactCompletionToFloatingSurface(_ message: ChatMessage) {

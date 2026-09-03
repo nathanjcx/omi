@@ -93,6 +93,7 @@ struct QueryHeroBar: View {
   var references: [ChatComposerReference] = []
   var onReferenceRemoved: (String) -> Void = { _ in }
 
+  @ObservedObject private var superMode = SuperModeController.shared
   @State private var isDropTargeted = false
   /// True while an input method has uncommitted marked text, which is the one moment the placeholder
   /// must stay hidden over an apparently empty field.
@@ -212,6 +213,11 @@ struct QueryHeroBar: View {
       attachButton(
         diameter: QueryShellLayout.micDiameter, glyphSize: QueryShellLayout.heroGlyphSize)
 
+      // Left of the mic, because Super Mode changes what the *next* question is answered by, and the
+      // mic is one of the two ways that question gets asked.
+      SuperModeButton(
+        diameter: QueryShellLayout.micDiameter, glyphSize: QueryShellLayout.heroGlyphSize)
+
       // No ground under the mic any more. It carried one for being the row's only round target, and
       // it is not: the send disc beside it is round, filled, and the thing the eye should land on.
       PushToTalkMicButton(
@@ -266,6 +272,11 @@ struct QueryHeroBar: View {
         glyphSize: QueryShellLayout.panelComposerGlyphSize)
 
       composer
+
+      // Same slot it takes in the hero — the trailing cluster reads the same in both placements.
+      SuperModeButton(
+        diameter: QueryShellLayout.panelComposerControlDiameter,
+        glyphSize: QueryShellLayout.panelComposerGlyphSize)
 
       // No ground of its own here. In the hero it is the row's only round target and needs one; in
       // this row it is one of three, and the one that is allowed to be filled is Send.
@@ -419,8 +430,22 @@ struct QueryHeroBar: View {
     .accessibilityIdentifier("query-shell-attach")
   }
 
+  /// **The field says which assistant is about to answer.**
+  ///
+  /// Super Mode redirects every send in this composer to Gemini, using only this screen and what has
+  /// been asked since it was switched on — a change with no other visible consequence until an answer
+  /// comes back sounding like a different assistant. The placeholder is the largest text on the row
+  /// and the one thing the eye is already on when typing starts, so it is where the mode says so. The
+  /// bolt beside it changes shape at the same moment; between them the state is unmissable from
+  /// either end of the row.
   private var placeholder: String {
-    mode == .answer ? "Ask a follow-up…" : RewindSearchMetrics.placeholder
+    Self.placeholderText(superModeOn: superMode.isOn, mode: mode)
+  }
+
+  /// Pure, so the claim above is testable without a window.
+  static func placeholderText(superModeOn: Bool, mode: QueryShellMode) -> String {
+    if superModeOn { return "Ask Gemini about this screen…" }
+    return mode == .answer ? "Ask a follow-up…" : RewindSearchMetrics.placeholder
   }
 
   private var fontSize: CGFloat {

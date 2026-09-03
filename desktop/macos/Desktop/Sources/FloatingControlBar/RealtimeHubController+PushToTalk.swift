@@ -466,6 +466,10 @@ extension RealtimeHubController {
         turnID: turnID,
         sessionID: voiceSessionID,
         responseID: voiceResponseID))
+    // The release-side half of the Super Mode handoff. A transcript that finalized *during* the hold
+    // is deferred by the recording guard and gets no second final event afterwards, so without this
+    // the words are captured and then nothing ever answers them.
+    handOffFinalTranscriptToSuperModeIfNeeded()
   }
 
   /// Prepare local state shared by immediate and deferred hub commits. Screen

@@ -719,6 +719,9 @@ extension RealtimeHubController {
       turnTranscript += text
     }
     if !text.isEmpty { lastInputTranscriptUpdateAt = Date() }
+    // Super Mode answers this turn instead of the hub. Hooked on the *final* transcript so the words
+    // are the ones the provider settled on, and so nothing about how they were captured changes.
+    if isFinal { handOffFinalTranscriptToSuperModeIfNeeded() }
     // Don't surface Gemini's LIVE partial transcript on the bar: on a quiet/near-silent
     // hold it transcribes background noise into random words (the bar shows "…" on commit
     // instead). turnTranscript is still kept for the agent-warm heuristic and the final.
@@ -732,12 +735,19 @@ extension RealtimeHubController {
     source: RealtimeHubSession
   ) {
     guard acceptsTurnEvent(identity, source: source), let identity else { return }
-    guard
-      RealtimeProviderOutputPresentationPolicy.decide(
-        screenGroundingState: screenGroundingState,
-        reducerOutputSuppressed: VoiceTurnCoordinator.shared.outputSnapshot.providerOutputSuppressed
-      ) == .present
-    else { return }
+    let outputDisposition = RealtimeProviderOutputPresentationPolicy.decide(
+      screenGroundingState: screenGroundingState,
+      reducerOutputSuppressed: VoiceTurnCoordinator.shared.outputSnapshot.providerOutputSuppressed,
+      superModeOwnsAnswer: RealtimeHubController.superModeOwnsVoiceAnswer
+    )
+    // **The model answering is the signal that it has finished hearing.** Gemini never marks an
+    // input transcript final — its branch emits every fragment with `isFinal: false` — so waiting
+    // for a final flag waits forever on the provider this actually runs on. The first byte of a
+    // reply is unambiguous: transcription is over, and the accumulated transcript is the question.
+    if outputDisposition == .suppressSuperModeOwnsAnswer {
+      handOffFinalTranscriptToSuperModeIfNeeded()
+    }
+    guard outputDisposition == .present else { return }
     guard let lease = acquireVoiceOutput(.nativeRealtime, reason: "provider_audio") else { return }
     if let voiceSessionID {
       guard let providerIdentity = VoiceTurnCoordinator.shared.activeTurn?.providerEffectIdentity
@@ -803,12 +813,19 @@ extension RealtimeHubController {
     source: RealtimeHubSession
   ) {
     guard acceptsTurnEvent(identity, source: source), let identity else { return }
-    guard
-      RealtimeProviderOutputPresentationPolicy.decide(
-        screenGroundingState: screenGroundingState,
-        reducerOutputSuppressed: VoiceTurnCoordinator.shared.outputSnapshot.providerOutputSuppressed
-      ) == .present
-    else { return }
+    let outputDisposition = RealtimeProviderOutputPresentationPolicy.decide(
+      screenGroundingState: screenGroundingState,
+      reducerOutputSuppressed: VoiceTurnCoordinator.shared.outputSnapshot.providerOutputSuppressed,
+      superModeOwnsAnswer: RealtimeHubController.superModeOwnsVoiceAnswer
+    )
+    // **The model answering is the signal that it has finished hearing.** Gemini never marks an
+    // input transcript final — its branch emits every fragment with `isFinal: false` — so waiting
+    // for a final flag waits forever on the provider this actually runs on. The first byte of a
+    // reply is unambiguous: transcription is over, and the accumulated transcript is the question.
+    if outputDisposition == .suppressSuperModeOwnsAnswer {
+      handOffFinalTranscriptToSuperModeIfNeeded()
+    }
+    guard outputDisposition == .present else { return }
     if !text.isEmpty {
       assistantText += text
       beginStreamingRealtimeProjectionIfNeeded()

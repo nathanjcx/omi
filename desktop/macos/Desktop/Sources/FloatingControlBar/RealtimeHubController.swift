@@ -54,6 +54,9 @@ final class RealtimeHubController: NSObject, RealtimeHubSessionDelegate {
   // Per-turn state.
   var turnTranscript = ""
   var providerTranscriptFinalized = false
+  /// The turn whose transcript has already been handed to Super Mode, so a second final input
+  /// transcript for the same hold cannot answer twice. See `RealtimeHubController+SuperMode`.
+  var superModeHandoffTurnID: VoiceTurnID?
   /// Last provider input-transcript mutation for the active PTT turn. Permission
   /// tools use this only to wait for a stable live transcript; it is reset with
   /// every turn and is never persisted.
