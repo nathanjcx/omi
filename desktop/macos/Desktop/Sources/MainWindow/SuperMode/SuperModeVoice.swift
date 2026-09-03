@@ -32,10 +32,21 @@ final class SuperModeVoice {
   /// A chunk is synthesized once the text reaches a sentence end, so speech starts on sentence one
   /// instead of after the whole answer — the same reason the answer itself streams. This cap forces
   /// a break in prose that never punctuates, so a run-on paragraph cannot hold the audio forever.
+  ///
+  /// Later chunks are deliberately the larger of the two: synthesis is concurrent, so their round
+  /// trips overlap and cost nothing extra, while a longer span gives the model room to carry prosody
+  /// across a whole thought instead of resetting it every few words.
   static let maxChunkCharacters = 220
+
+  /// The first chunk breaks sooner, because nothing is playing yet and its round trip is the only
+  /// thing between the answer appearing and the answer being heard. A shorter opening clause starts
+  /// the audio measurably earlier; every chunk after it is already overlapping.
+  static let firstChunkCharacters = 90
 
   private let player = StreamingPCMPlayer(sampleRate: 24000)
   private var pending = ""
+  /// Whether this answer has already sent a chunk, so the shorter first-chunk cap applies once.
+  private var hasSpoken = false
   /// Serializes synthesis so chunks are enqueued in the order they were spoken in. Without it two
   /// concurrent requests race and the second sentence can reach the speaker first.
   private var queue: Task<Void, Never>?
@@ -45,7 +56,8 @@ final class SuperModeVoice {
   /// Adds newly streamed text, speaking whatever complete sentences it now contains.
   func speak(_ fragment: String) {
     pending += fragment
-    while let chunk = Self.nextChunk(from: &pending, isFinal: false) {
+    while let chunk = Self.nextChunk(from: &pending, isFinal: false, isFirst: !hasSpoken) {
+      hasSpoken = true
       enqueue(chunk)
     }
   }
@@ -53,7 +65,8 @@ final class SuperModeVoice {
   /// Speaks whatever is left once the answer is complete, including a trailing fragment that never
   /// got its full stop.
   func finish() {
-    while let chunk = Self.nextChunk(from: &pending, isFinal: true) {
+    while let chunk = Self.nextChunk(from: &pending, isFinal: true, isFirst: !hasSpoken) {
+      hasSpoken = true
       enqueue(chunk)
     }
   }
@@ -63,20 +76,30 @@ final class SuperModeVoice {
     queue?.cancel()
     queue = nil
     pending = ""
+    hasSpoken = false
     player.stop()
   }
 
+  /// **Synthesis runs concurrently; only playback is ordered.**
+  ///
+  /// The first version awaited the previous chunk *before* calling the API, which made every
+  /// sentence's round trip wait for the one before it to finish. At a measured ~3s per call that
+  /// stacked into roughly twelve seconds of dead air on a four-sentence answer, on top of the
+  /// answer's own streaming — and it looked correct, because playback order was right.
+  ///
+  /// Starting the request immediately and awaiting the predecessor only before *enqueueing* keeps
+  /// the same playback order while overlapping the network work with itself and with the answer
+  /// still streaming in. Only the first sentence pays the full round trip.
   private func enqueue(_ text: String) {
     let previous = queue
+    let key = SuperModeController.shared.apiKey
+    // Fired here, outside the ordering chain, so it is already in flight while earlier chunks play.
+    let synthesis = Task.detached { await Self.synthesize(text, key: key) }
     queue = Task { @MainActor [weak self] in
-      // Await the chunk before this one so playback order matches reading order, and inherit its
-      // cancellation: a stop mid-answer must not let a later sentence still arrive.
+      let pcm = await synthesis.value
+      // Ordering fence: everything ahead of this chunk must be queued before it is.
       _ = await previous?.value
-      guard !Task.isCancelled, let self else { return }
-      guard let pcm = await Self.synthesize(text, key: SuperModeController.shared.apiKey) else {
-        return
-      }
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled, let self, let pcm else { return }
       _ = self.player.enqueue(pcm)
     }
   }
@@ -143,7 +166,7 @@ final class SuperModeVoice {
   ///
   /// Pure and `inout` so the caller keeps no second copy of the boundary rule — a chunker whose
   /// "what was consumed" disagrees with "what was spoken" repeats or drops a sentence.
-  static func nextChunk(from buffer: inout String, isFinal: Bool) -> String? {
+  static func nextChunk(from buffer: inout String, isFinal: Bool, isFirst: Bool = false) -> String? {
     let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       buffer = ""
@@ -153,14 +176,20 @@ final class SuperModeVoice {
       let chunk = String(buffer[buffer.startIndex..<end]).trimmingCharacters(
         in: .whitespacesAndNewlines)
       buffer = String(buffer[end...])
-      return chunk.isEmpty ? nextChunk(from: &buffer, isFinal: isFinal) : chunk
+      return chunk.isEmpty ? nextChunk(from: &buffer, isFinal: isFinal, isFirst: isFirst) : chunk
     }
-    // Prose that never punctuates would otherwise hold every later sentence behind it.
-    if buffer.count >= maxChunkCharacters {
-      let end = buffer.index(buffer.startIndex, offsetBy: maxChunkCharacters)
-      let chunk = String(buffer[buffer.startIndex..<end])
+    // Prose that never punctuates would otherwise hold every later sentence behind it — and the
+    // opening one holds up the only round trip nothing is overlapping, so it breaks sooner.
+    let cap = isFirst ? firstChunkCharacters : maxChunkCharacters
+    if buffer.count >= cap {
+      // Break on a word boundary: cutting mid-word makes the synthesizer pronounce the fragment.
+      let hardEnd = buffer.index(buffer.startIndex, offsetBy: cap)
+      let end =
+        buffer[buffer.startIndex..<hardEnd].lastIndex(where: { $0.isWhitespace }) ?? hardEnd
+      let chunk = String(buffer[buffer.startIndex..<end]).trimmingCharacters(
+        in: .whitespacesAndNewlines)
       buffer = String(buffer[end...])
-      return chunk
+      return chunk.isEmpty ? nil : chunk
     }
     guard isFinal else { return nil }
     buffer = ""

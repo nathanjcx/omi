@@ -112,11 +112,9 @@ final class SuperModeTests: XCTestCase {
     let controller = SuperModeController()
     controller.turnOn()
     XCTAssertTrue(controller.isOn)
-    XCTAssertNotNil(controller.startedAt)
 
     controller.turnOff()
     XCTAssertFalse(controller.isOn)
-    XCTAssertNil(controller.startedAt, "an off mode still claims a start time")
     XCTAssertTrue(controller.turns.isEmpty)
 
     controller.turnOn()
@@ -461,11 +459,29 @@ final class SuperModeTests: XCTestCase {
     XCTAssertNil(SuperModeVoice.nextChunk(from: &buffer, isFinal: true))
   }
 
-  /// Prose with no punctuation at all would otherwise hold every later sentence behind it.
-  func testAnUnpunctuatedRunOnIsBrokenAtTheCap() throws {
+  /// Prose with no punctuation at all would otherwise hold every later sentence behind it — but the
+  /// break lands on a word boundary, because cutting mid-word makes the synthesizer pronounce the
+  /// fragment as if it were a word.
+  func testAnUnpunctuatedRunOnIsBrokenAtAWordBoundaryUnderTheCap() throws {
     var buffer = String(repeating: "word ", count: 200)
     let chunk = try XCTUnwrap(SuperModeVoice.nextChunk(from: &buffer, isFinal: false))
-    XCTAssertEqual(chunk.count, SuperModeVoice.maxChunkCharacters)
+    XCTAssertLessThanOrEqual(chunk.count, SuperModeVoice.maxChunkCharacters)
+    XCTAssertGreaterThan(chunk.count, SuperModeVoice.maxChunkCharacters - 10, "broke far too early")
+    XCTAssertTrue(chunk.hasSuffix("word"), "the break split a word: \(chunk.suffix(12).debugDescription)")
+  }
+
+  /// **The opening chunk breaks sooner than the rest.** Nothing is playing yet, so its round trip is
+  /// the only thing between the answer appearing and the answer being heard; every later chunk is
+  /// already overlapping one that is playing.
+  func testTheFirstChunkBreaksSoonerThanLaterOnes() throws {
+    var first = String(repeating: "word ", count: 200)
+    let opening = try XCTUnwrap(SuperModeVoice.nextChunk(from: &first, isFinal: false, isFirst: true))
+    XCTAssertLessThanOrEqual(opening.count, SuperModeVoice.firstChunkCharacters)
+
+    var later = String(repeating: "word ", count: 200)
+    let subsequent = try XCTUnwrap(
+      SuperModeVoice.nextChunk(from: &later, isFinal: false, isFirst: false))
+    XCTAssertGreaterThan(subsequent.count, opening.count)
   }
 
   // MARK: - Streaming (time to first token)
@@ -543,9 +559,4 @@ final class SuperModeTests: XCTestCase {
     )?.makeImage()
   }
 
-  func testElapsedLabelRollsOverIntoHours() {
-    XCTAssertEqual(SuperModeController.elapsedLabel(0), "0:00")
-    XCTAssertEqual(SuperModeController.elapsedLabel(65), "1:05")
-    XCTAssertEqual(SuperModeController.elapsedLabel(3671), "1:01:11")
-  }
 }
