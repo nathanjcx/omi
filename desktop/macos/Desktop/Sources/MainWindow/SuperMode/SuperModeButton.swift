@@ -20,13 +20,13 @@ enum SuperModeChrome {
 /// keeps one grammar. It is not a `Button`: a `Button` fires its action when a long press ends, so
 /// holding it would open the popover and toggle the mode in the same gesture.
 ///
-/// **Off it is a glyph; on it is a filled pill that says its own name.** The first version changed
-/// only the disc's fill, which is the same amount of ink in the same silhouette next to two other
-/// round controls — a state you have to go looking for, on a mode that silently changes where every
-/// answer comes from. A control whose *shape and width* change cannot be missed, and the word is
-/// there so nobody has to remember what a lightning bolt meant. The composer's placeholder changes
-/// with it (`QueryHeroBar.placeholder`): between them, the two largest things on the row both say
-/// the mode is on.
+/// **One circle, filled when on and bare when off.** It briefly grew into a labelled pill with a
+/// running clock, which did make the state obvious but put a widening, ticking object in a row of
+/// three fixed-width controls — the composer reflowed every time the mode was toggled, and a timer
+/// nobody asked for kept redrawing while you typed. The state is carried by the fill inverting
+/// (`Ink.primary` ground, `Ink.surface` glyph — the same pair as the row's Send disc) and, one
+/// control away, by the composer's own placeholder changing to name Gemini
+/// (`QueryHeroBar.placeholderText`). That is the loud half, and it costs no layout.
 struct SuperModeButton: View {
   @ObservedObject private var superMode = SuperModeController.shared
 
@@ -48,25 +48,21 @@ struct SuperModeButton: View {
   var body: some View {
     bolt
       .animation(
-        InkReduceMotion.animation(.spring(response: 0.26, dampingFraction: 0.78)),
-        value: superMode.isOn)
+        InkReduceMotion.animation(.easeOut(duration: InkMotion.press)), value: superMode.isOn)
   }
 
   private var bolt: some View {
-    HStack(spacing: OmiSpacing.xxs) {
+    ZStack {
+      Circle().fill(fill)
       // The ink pair the row's Send disc uses, never a hue: "on" reads from the ladder, and the one
       // accent that would look good here is exactly the one the brand does not use (INV-UI-1).
       Image(systemName: "bolt.fill")
         .scaledFont(size: glyphSize * 0.8, weight: .semibold)
         .foregroundColor(superMode.isOn ? Ink.surface : idleTint)
-      if superMode.isOn { label }
     }
-    // A circle while it is a lone glyph, a capsule once it carries words — the corner follows the
-    // content rather than being two different shapes maintained separately.
-    .padding(.horizontal, superMode.isOn ? OmiSpacing.sm : 0)
-    .frame(minWidth: diameter, minHeight: diameter)
-    .background(Capsule().fill(fill))
-    .contentShape(Capsule())
+    // Fixed size in both states, so toggling never reflows the row around it.
+    .frame(width: diameter, height: diameter)
+    .contentShape(Circle())
     .onHover { isHovering = $0 }
     // **One gesture owns both outcomes, and it is timed off the press rather than by a recognizer.**
     //
@@ -146,30 +142,6 @@ struct SuperModeButton: View {
     return isHovering ? Ink.rowFill : .clear
   }
 
-  /// The mode's name and how long it has been on, reversed out of the filled pill.
-  ///
-  /// Re-rendered by a timeline, not by a stored `Timer`: the clock is the only thing here that needs
-  /// a tick, so nothing has to be started, stopped, or invalidated when the mode flips.
-  private var label: some View {
-    TimelineView(.periodic(from: .now, by: 1)) { context in
-      HStack(spacing: OmiSpacing.xxs) {
-        Text("Super Mode")
-          .scaledFont(size: OmiType.caption, weight: .semibold)
-        Text(
-          SuperModeController.elapsedLabel(
-            context.date.timeIntervalSince(superMode.startedAt ?? context.date))
-        )
-        .scaledFont(size: OmiType.caption, weight: .medium)
-        .monospacedDigit()
-        // One rung down, so the clock reads as a detail of the name rather than as a second label
-        // competing with it. `Ink.surface` is the pill's own ground, so this is that ground faded.
-        .foregroundColor(Ink.surface.opacity(0.7))
-      }
-      .foregroundColor(Ink.surface)
-      .fixedSize()
-    }
-    .accessibilityHidden(true)
-  }
 }
 
 /// The settings blob: it pours down from the bolt and lands as a panel.
@@ -233,18 +205,11 @@ struct SuperModePanel: View {
         Image(systemName: "bolt.fill").scaledFont(size: OmiType.caption, weight: .semibold)
         Text("Super Mode").scaledFont(size: OmiType.body, weight: .semibold)
         Spacer(minLength: 0)
-        if superMode.isOn {
-          TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(
-              "on for "
-                + SuperModeController.elapsedLabel(
-                  context.date.timeIntervalSince(superMode.startedAt ?? context.date))
-            )
-            .scaledFont(size: OmiType.caption)
-            .monospacedDigit()
-            .foregroundColor(Ink.tertiary)
-          }
-        }
+        // Deliberately no clock. How long the mode has been on is not a thing anyone acts on, and a
+        // per-second redraw in a popover you are typing a key into is a cost with no reader.
+        Text(superMode.isOn ? "On" : "Off")
+          .scaledFont(size: OmiType.caption, weight: .medium)
+          .foregroundColor(Ink.tertiary)
       }
       .foregroundColor(Ink.primary)
 

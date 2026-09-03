@@ -113,9 +113,6 @@ final class SuperModeController: ObservableObject {
   }
 
   @Published private(set) var isOn = false
-  /// When the current session started, so the UI can say how long the mode has been on. `nil`
-  /// exactly when `isOn` is false.
-  @Published private(set) var startedAt: Date?
   @Published var isPanelOpen = false
   @Published var apiKey: String {
     didSet { UserDefaults.standard.set(apiKey, forKey: Self.apiKeyDefaultsKey) }
@@ -163,7 +160,6 @@ final class SuperModeController: ObservableObject {
     // Clearing on *both* edges, not just on the way in: a session's transcript must not survive to
     // be read by the next one, which would be exactly the leaked context this mode rules out.
     turns = []
-    startedAt = Date()
     isOn = true
     // Switching the mode on is the strongest signal a request is coming: open the connection and
     // check the pinned model now, while the user is still deciding what to ask.
@@ -173,7 +169,6 @@ final class SuperModeController: ObservableObject {
 
   func turnOff() {
     turns = []
-    startedAt = nil
     isOn = false
   }
 
@@ -599,17 +594,4 @@ final class SuperModeController: ObservableObject {
     }
   }
 
-  // MARK: - Elapsed
-
-  /// `m:ss` under an hour, `h:mm:ss` past it. A mode that bills a user's own API key has to say how
-  /// long it has been running without them having to do the subtraction.
-  static func elapsedLabel(_ seconds: TimeInterval) -> String {
-    let total = max(0, Int(seconds))
-    let hours = total / 3600
-    let minutes = (total % 3600) / 60
-    let secs = total % 60
-    return hours > 0
-      ? String(format: "%d:%02d:%02d", hours, minutes, secs)
-      : String(format: "%d:%02d", minutes, secs)
-  }
 }
