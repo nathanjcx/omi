@@ -15,6 +15,44 @@ and `PushToTalkMicButton` renders it for both the main-window composer and the
 floating ask bar. A click carries no hold, so it takes the hands-free lane the
 double-tap shortcut already drives: first click locks, next click finalizes.
 
+## Voice typing ("type <text>")
+
+A push-to-talk turn that opens with the spoken word "type" dictates into
+whichever app owns the caret instead of asking Omi. `VoiceTypeSession` owns that
+decision and nothing else does; `PushToTalkManager` asks it on every transcript
+change and suppresses the chat dispatch (or the hub commit) only while it claims
+the turn.
+
+- The decision latches **one way**: once typing, always typing for that turn.
+  Not-typing never latches, because the first on-device decode of a hold is a
+  couple of characters of a half-spoken word — latching on that rejected every
+  real turn before "Type" was fully said.
+- `VoiceTypeCommandParser` is tri-state for the same reason: a transcript that is
+  still a viable prefix of a wake word decides nothing.
+- `VoiceTypeStabilizer` holds back the decoder's moving edge: text is typed once
+  two consecutive decodes agree on it, and a word the newer decode is still
+  spelling waits one probe. Whole words are released immediately (waiting there
+  costs a word of latency and buys nothing) and an unchanged decode releases in
+  full, so a pause catches up. Without this the tail is typed and rewritten every
+  probe, which is what "real time but glitchy" looks like.
+- `VoiceTypeStreamPlanner` turns each revised transcript into the smallest edit
+  (backspaces + insertion), so recognizer revisions correct what is already on
+  screen instead of appending a second wrong word.
+- `CGEventKeystrokeSink` posts from a **private-state** event source. PTT is a
+  modifier-only chord, so the user is physically holding Option while the events
+  are posted; a `.hidSystemState` source would turn every dictated "n" into ⌥n.
+- The realtime hub does not transcribe the user's own speech until after commit,
+  which is far too late to type as they speak or to withhold the model's answer.
+  On that route `PushToTalkManager` re-decodes the growing turn buffer with the
+  already-loaded Parakeet model (`PTTLanguageIdentifier.transcribe`, ~130 ms per
+  probe) every 300 ms. `VoiceTypeAudioTrim` drops the quiet lead-in first: a hold
+  begins at key-down, and handing seconds of room tone to the recognizer yields
+  invented words, not silence.
+- A claimed hub turn is **cancelled, never committed**, so the model never
+  answers a dictation out loud.
+
+Guards: `Tests/VoiceTypingTests.swift`.
+
 ## The pill's glass
 
 `NotchGlassChrome.swift` owns every colour and surface value this package draws
