@@ -236,6 +236,32 @@ final class VoiceTypeSessionTests: XCTestCase {
   }
 }
 
+final class PTTRoutePolicyTests: XCTestCase {
+
+  func testNoNetworkDictatesOnDeviceInsteadOfWaitingForAHubItCannotReach() {
+    // The bug this guards: offline, every remote route (hub, omni, batch STT) is
+    // unreachable, so a turn spent its whole warm deadline before failing and
+    // typed nothing — while the model that could have typed it was already
+    // loaded on-device.
+    XCTAssertEqual(
+      PTTRoutePolicy.decide(isOnline: false, admitsImmediately: false), .onDeviceDictation)
+  }
+
+  func testNoNetworkWinsOverAHubThatClaimsToBeAdmitted() {
+    // An admitted hub is a socket that was admitted, not one that can still
+    // carry the turn. With no path, believing it costs the user the turn.
+    XCTAssertEqual(
+      PTTRoutePolicy.decide(isOnline: false, admitsImmediately: true), .onDeviceDictation)
+  }
+
+  func testOnlineKeepsTheExistingHubRouting() {
+    XCTAssertEqual(
+      PTTRoutePolicy.decide(isOnline: true, admitsImmediately: true), .hubImmediate)
+    XCTAssertEqual(
+      PTTRoutePolicy.decide(isOnline: true, admitsImmediately: false), .hubWarmWait)
+  }
+}
+
 final class VoiceTypeAudioTrimTests: XCTestCase {
 
   private func pcm(_ samples: [Int16]) -> Data {

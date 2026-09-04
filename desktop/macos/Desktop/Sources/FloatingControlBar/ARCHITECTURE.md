@@ -60,6 +60,18 @@ the turn.
   after key-up, the record comes from the flush, not from what the probes had
   delivered when the key came up.
 
+- **Offline dictation.** `PTTRoutePolicy.decide` picks the route at key-down and
+  checks the network first and unconditionally: with no path (`NetworkReachability`,
+  an `NWPathMonitor`), the turn takes the `.onDeviceASR` route and is transcribed
+  entirely by the already-loaded Parakeet model. Nothing waits on the hub's warm
+  deadline to discover there was never a network, so the first keystroke lands as
+  fast as it does online. A hub that reports itself admitted does not override
+  this — it is a socket that *was* admitted, not one that can still carry the
+  turn. Only dictation completes offline: answering needs a cloud model, so a
+  non-dictation turn ends as `providerFailed` rather than pretending to be in
+  flight. The route is a real case, not a reused `deepgramBatch`, so telemetry
+  never reports Deepgram for a turn that never left the machine.
+
 Guards: `Tests/VoiceTypingTests.swift`.
 
 ## The pill's glass

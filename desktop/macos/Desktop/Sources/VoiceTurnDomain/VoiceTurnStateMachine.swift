@@ -130,6 +130,10 @@ package enum VoiceTurnRoute: Equatable, Sendable {
   case omniSTT
   case deepgramBatch
   case deepgramLive
+  /// Transcribed entirely on-device. Chosen when there is no network path at
+  /// all, so a dictation still types instead of waiting out a hub warm deadline
+  /// it can never satisfy.
+  case onDeviceASR
 }
 
 package enum VoiceContextOutcome: Equatable, Sendable {

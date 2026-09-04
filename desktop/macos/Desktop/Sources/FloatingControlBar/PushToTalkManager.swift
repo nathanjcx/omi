@@ -389,6 +389,10 @@ class PushToTalkManager: ObservableObject {
     activeVoiceRoute == .hubWarmWait
   }
 
+  private var isOnDeviceASR: Bool {
+    activeVoiceRoute == .onDeviceASR
+  }
+
   private var isHubMode: Bool {
     if case .hub = activeVoiceRoute { return true }
     return false
@@ -542,7 +546,7 @@ class PushToTalkManager: ObservableObject {
     switch route {
     case .hub, .hubWarmWait:
       return true
-    case .undecided, .omniSTT, .deepgramBatch, .deepgramLive:
+    case .undecided, .omniSTT, .deepgramBatch, .deepgramLive, .onDeviceASR:
       return false
     }
   }
@@ -1319,6 +1323,14 @@ class PushToTalkManager: ObservableObject {
       return
     }
 
+    // Offline: nothing remote will ever transcribe this turn, so it is closed
+    // from the on-device decode rather than handed to a provider.
+    if isOnDeviceASR {
+      activeTracer = nil
+      finishOnDeviceDictationTurn(turnID: turnID)
+      return
+    }
+
     // Realtime hub: silence-gate the turn first. An accidental ⌥ tap (or a hold
     // with nothing said) records near-silence — committing it makes the model
     // answer anyway (often a generic "looking at your screen"). Drop those before
@@ -1957,13 +1969,18 @@ class PushToTalkManager: ObservableObject {
   /// kernel context. Capture starts in either case; only an exact binding earns
   /// direct ingress, otherwise the controller buffers through its one handoff.
   private func startRealtimePTTRoute(startMicrophoneCapture: Bool) {
-    switch RealtimeHubController.shared.pttAdmission {
-    case .immediate:
+    let decision = PTTRoutePolicy.decide(
+      isOnline: NetworkReachability.shared.isOnline,
+      admitsImmediately: RealtimeHubController.shared.pttAdmission == .immediate)
+    switch decision {
+    case .onDeviceDictation:
+      startOnDeviceDictation(startMicrophoneCapture: startMicrophoneCapture)
+    case .hubImmediate:
       if let turnID = currentVoiceTurnID {
         voiceTurnCoordinator.publish(.selectRoute(turnID: turnID, route: .hub(sessionID: nil)))
       }
       _ = startRealtimeHubCapture(bufferWhileWarming: !startMicrophoneCapture)
-    case .captureAndBuffer:
+    case .hubWarmWait:
       startRealtimeHubWarmWait(startMicrophoneCapture: startMicrophoneCapture)
     }
   }
@@ -2019,6 +2036,63 @@ class PushToTalkManager: ObservableObject {
     }
     log("PushToTalkManager: realtime hub capture admitted — model is the voice hub")
     return true
+  }
+
+  /// Runs a turn with no network at all: mic into the batch buffer, decoded by
+  /// the on-device Parakeet model, typed as it is spoken.
+  ///
+  /// Only dictation can complete here. A question needs a cloud model to answer
+  /// it, and no on-device fallback replaces that — such a turn ends cleanly
+  /// rather than pretending to be in flight.
+  private func startOnDeviceDictation(startMicrophoneCapture: Bool) {
+    batchAudioLock.lock()
+    batchAudioBuffer = Data()
+    batchAudioLock.unlock()
+    if let turnID = currentVoiceTurnID {
+      voiceTurnCoordinator.publish(.selectRoute(turnID: turnID, route: .onDeviceASR))
+    }
+    log("PushToTalkManager: no network — dictating with the on-device model")
+    DesktopDiagnosticsManager.shared.recordFallback(
+      area: "ptt_cascade",
+      from: "hub",
+      to: "on_device_asr",
+      reason: "network",
+      outcome: .recovered)
+    guard startMicrophoneCapture else { return }
+    if let builtIn = preferredPTTInputOverrideDeviceID() {
+      startMicCapture(batchMode: true, overrideDeviceID: builtIn)
+    } else {
+      startMicCapture(batchMode: true)
+    }
+  }
+
+  /// Closes an offline turn. Whatever the probes typed is completed from a final
+  /// on-device decode and journaled, exactly as the hub route does; a turn that
+  /// never dictated simply ends, since there is no model available to answer it.
+  private func finishOnDeviceDictationTurn(turnID: VoiceTurnID) {
+    batchAudioLock.lock()
+    let audio = VoiceTypeAudioTrim.trimmingLeadingSilence(batchAudioBuffer)
+    batchAudioLock.unlock()
+    let claimed = voiceTypeSession.claimsTurn
+    let flushToken = voiceTypeSession.beginFlush()
+    log(
+      "PushToTalkManager: closing offline turn (\(voiceTypeSession.typedCount) chars typed)")
+    Task { @MainActor [weak self] in
+      let text = await PTTLanguageIdentifier.shared.transcribe(pcm16k: audio)
+      guard let self else { return }
+      let completion = self.voiceTypeSession.endFlush(token: flushToken, finalTranscript: text)
+      if case .typed(let typed) = completion {
+        self.recordVoiceTypingExchange(utterance: text ?? typed, typed: typed, turnID: turnID)
+      }
+      guard self.voiceTurnCoordinator.activeTurnID == turnID else { return }
+      if claimed || completion != .none {
+        self.voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
+      } else {
+        // Not a dictation. Offline there is nothing that can answer it.
+        log("PushToTalkManager: offline turn was not a dictation — no provider to answer it")
+        self.voiceTurnCoordinator.publish(.finish(turnID: turnID, reason: .providerFailed))
+      }
+    }
   }
 
   private func startRealtimeHubWarmWait(startMicrophoneCapture: Bool = true) {
@@ -2362,6 +2436,13 @@ class PushToTalkManager: ObservableObject {
           // main actor. A chunk queued behind finalization observes the
           // closed capture token and cannot leak into the next turn.
           RealtimeHubController.shared.feedAudio(audioData, turnID: turnID)
+          self.appendBatchAudioBounded(audioData, turn: generation)
+          self.probeVoiceTyping(turnID: turnID)
+          return
+        }
+        if self.isOnDeviceASR {
+          // Offline: the probes are the only transcript there is, so they are
+          // what makes the text appear while the key is still held.
           self.appendBatchAudioBounded(audioData, turn: generation)
           self.probeVoiceTyping(turnID: turnID)
           return
