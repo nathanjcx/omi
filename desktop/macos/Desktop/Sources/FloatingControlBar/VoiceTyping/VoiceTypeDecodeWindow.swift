@@ -50,6 +50,17 @@ struct VoiceTypeDecodeWindow {
     pendingAudio.append(chunk)
   }
 
+  /// Takes over from another recognizer, treating its transcript as already
+  /// typed and starting a fresh window.
+  ///
+  /// Used when the backend stream dies mid-dictation: the words it streamed are
+  /// on screen, so they are the committed prefix, and the local model resumes
+  /// from the audio that follows rather than leaving a hole in the sentence.
+  mutating func adopt(committedText text: String) {
+    committedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    pendingAudio = Data()
+  }
+
   /// The whole utterance: everything committed, plus this window's decode.
   func transcript(tail: String) -> String {
     let trimmedTail = tail.trimmingCharacters(in: .whitespaces)

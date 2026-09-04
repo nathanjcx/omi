@@ -2408,13 +2408,29 @@ class PushToTalkManager: ObservableObject {
         let generation = leased.generation
         let turnID = leased.turnID
         self.pttLifecycle.ingestAudioChunk(audioData)
+        // Every route, unconditionally. Feeding this per-branch meant the
+        // hub's warm-wait — which matches none of the branches below — never
+        // reached typing, so a wake word spoken while the hub connected was
+        // lost outright and the turn silently became a question.
+        // Not while the backend stream owns the transcript: nothing re-decodes
+        // this audio then, so nothing would ever commit it and the buffer would
+        // grow for the whole dictation.
+        if !self.voiceTypingCloudIsDriving {
+          self.voiceTypingWindow.append(audioData)
+        }
+        if self.isWaitingForHub {
+          // Type while the hub is still connecting rather than after: the
+          // on-device model needs no socket, so there is nothing to wait for.
+          self.appendBatchAudioBounded(audioData, turn: generation)
+          self.probeVoiceTyping(turnID: turnID)
+          return
+        }
         if self.isHubMode {
           // Lifecycle admission and provider commit are serialized on the
           // main actor. A chunk queued behind finalization observes the
           // closed capture token and cannot leak into the next turn.
           RealtimeHubController.shared.feedAudio(audioData, turnID: turnID)
           self.appendBatchAudioBounded(audioData, turn: generation)
-          self.voiceTypingWindow.append(audioData)
           self.voiceTypingCloudService?.sendAudio(audioData)
           self.probeVoiceTyping(turnID: turnID)
           return
@@ -2423,7 +2439,6 @@ class PushToTalkManager: ObservableObject {
           // Offline: the probes are the only transcript there is, so they are
           // what makes the text appear while the key is still held.
           self.appendBatchAudioBounded(audioData, turn: generation)
-          self.voiceTypingWindow.append(audioData)
           self.probeVoiceTyping(turnID: turnID)
           return
         }
@@ -3210,7 +3225,10 @@ class PushToTalkManager: ObservableObject {
   private func gateHubCommitOnFinalDictationCheck(
     turnID: VoiceTurnID, turnAudio: Data, totalSec: Double
   ) {
-    let trimmed = VoiceTypeAudioTrim.trimmingLeadingSilence(turnAudio)
+    // The uncommitted window, not the whole turn: on a long hold, decoding
+    // every minute of it here would stall the model's answer by seconds. What
+    // is already committed is already text.
+    let trimmed = voiceTypingWindowTailForFlush()
     guard !trimmed.isEmpty else {
       commitHubTurn(turnID: turnID, turnAudio: turnAudio, totalSec: totalSec)
       return
@@ -3219,7 +3237,7 @@ class PushToTalkManager: ObservableObject {
       let decoded = await PTTLanguageIdentifier.shared.transcribe(pcm16k: trimmed)
       guard let self, self.voiceTurnCoordinator.activeTurnID == turnID else { return }
       if let decoded {
-        let text = self.correctedForTyping(decoded)
+        let text = self.correctedForTyping(self.voiceTypingWindow.transcript(tail: decoded))
         if case .typed(let typed) = self.voiceTypeSession.finish(transcript: text) {
           log(
             "PushToTalkManager: final decode caught a dictation the probes missed "
@@ -3336,6 +3354,11 @@ class PushToTalkManager: ObservableObject {
           // freezing on a transcript that has stopped growing.
           self.voiceTypingCloudFailed = true
           self.voiceTypingCloudService = nil
+          // Its words are on screen, so they are the prefix the local model
+          // continues from — otherwise the sentence would have a hole where the
+          // stream died.
+          self.voiceTypingWindow.adopt(committedText: self.voiceTypingCloudTranscript)
+          self.voiceTypingLocalTranscript = self.voiceTypingCloudTranscript
           DesktopDiagnosticsManager.shared.recordFallback(
             area: "voice_typing",
             from: "backend_streaming_stt",

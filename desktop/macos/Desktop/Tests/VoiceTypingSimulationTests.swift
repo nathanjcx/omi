@@ -66,6 +66,7 @@ final class VoiceTypingSimulationTests: XCTestCase {
     reviseLastWord: Bool = false,
     trusted: Bool = true,
     nilProbeEvery: Int = 0,
+    probesStartAtWord: Int = 0,
     window seededWindow: VoiceTypeDecodeWindow = VoiceTypeDecodeWindow()
   ) -> Outcome {
     let sink = RecordingSink()
@@ -102,6 +103,10 @@ final class VoiceTypingSimulationTests: XCTestCase {
         let tail = visible.joined(separator: " ")
         peakDecode = max(peakDecode, window.pendingAudio.count)
         probeCount += 1
+        // Audio arrives before probing does — the hub's warm-wait captures for
+        // up to a second before the route settles. Those words must still be
+        // in the window when the first probe finally runs.
+        if index < probesStartAtWord { continue }
         // A real probe sometimes returns nothing at all (observed live as
         // `nil`). The loop must survive that without losing the turn.
         if nilProbeEvery > 0, probeCount % nilProbeEvery == 0 { continue }
@@ -323,6 +328,16 @@ final class VoiceTypingSimulationTests: XCTestCase {
       clipped.count, 5, "forced cuts clipped more words than there were cuts: \(clipped)")
     XCTAssertEqual(
       typed.count, words.count - 1, "every word must still be typed, clipped or not")
+  }
+
+  func testAWakeWordSpokenBeforeProbingStartsIsStillFound() {
+    // The regression: typing's buffer was fed per-route, and the hub's
+    // warm-wait matched no route — so "Type" said while the hub connected never
+    // reached the recognizer and the turn silently became a question.
+    let words = ["Type", "send", "the", "notes", "to", "the", "team", "now"]
+    let outcome = runHold(words: words, pausesAfter: [4], probesStartAtWord: 3)
+    XCTAssertTrue(outcome.claimed, "the wake word must survive audio that predates probing")
+    XCTAssertEqual(outcome.typed, expectedTyped(words))
   }
 
   // MARK: - Quickness and sizing

@@ -72,6 +72,57 @@ final class VoiceTypeStreamPlannerTests: XCTestCase {
     XCTAssertEqual(planner.typed, "I write")
   }
 
+  func testACorrectionNearTheMovingEdgeIsStillMade() {
+    var planner = VoiceTypeStreamPlanner()
+    _ = planner.plan(for: "I will write the notes tonite")
+    // Two words back: worth fixing.
+    let edit = planner.plan(for: "I will write the notes tonight")
+    XCTAssertEqual(edit.backspaces, 2)
+    XCTAssertEqual(planner.typed, "I will write the notes tonight")
+  }
+
+  func testACorrectionTooFarBackIsNotMade() {
+    // Erasing half a sentence to fix a word from ten words ago is violent to
+    // watch and fights the user if they have started editing behind the caret.
+    var planner = VoiceTypeStreamPlanner()
+    _ = planner.plan(for: "the quick brown fox jumps over the lazy dog today")
+    let edit = planner.plan(for: "the quick brown cat jumps over the lazy dog today and more")
+    XCTAssertEqual(edit.backspaces, 0, "must not rewind past the last few words")
+    XCTAssertEqual(edit.insertion, " and more", "the tail keeps flowing")
+    XCTAssertEqual(
+      planner.typed, "the quick brown fox jumps over the lazy dog today and more",
+      "the planner tracks what is really on screen, not what it wished were there")
+  }
+
+  func testADistantRevisionWithNothingNewEmitsNothing() {
+    var planner = VoiceTypeStreamPlanner()
+    _ = planner.plan(for: "one two three four five six seven eight")
+    XCTAssertTrue(planner.plan(for: "one two THREE four five six seven eight").isEmpty)
+  }
+
+  func testNoEditEverDeletesMoreThanTheRewindLimit() {
+    // Property: however the transcript is revised, the planner never proposes a
+    // deletion longer than the last few words on screen.
+    var planner = VoiceTypeStreamPlanner()
+    let revisions = [
+      "alpha bravo charlie", "alpha bravo charlie delta", "alpha XXXXX charlie delta",
+      "alpha bravo charlie delta echo", "completely different text entirely",
+      "alpha bravo charlie delta echo foxtrot", "a",
+    ]
+    for revision in revisions {
+      let before = planner.typed
+      let limit =
+        before.split(separator: " ", omittingEmptySubsequences: false).count
+          > VoiceTypeStreamPlanner.maxRewindWords
+        ? before.split(separator: " ", omittingEmptySubsequences: false)
+          .suffix(VoiceTypeStreamPlanner.maxRewindWords).joined(separator: " ").count
+        : before.count
+      let edit = planner.plan(for: revision)
+      XCTAssertLessThanOrEqual(
+        edit.backspaces, limit, "deleted \(edit.backspaces) of \(before.count) for \(revision)")
+    }
+  }
+
   func testUnchangedTranscriptEmitsNothing() {
     var planner = VoiceTypeStreamPlanner()
     _ = planner.plan(for: "same")
@@ -350,6 +401,19 @@ final class VoiceTypeDecodeWindowTests: XCTestCase {
     w.append(audio(seconds: 25))
     XCTAssertFalse(w.commitIfReady(tail: "   ", endsQuiet: true, tailIsStable: true))
     XCTAssertFalse(w.hasCommitted)
+  }
+
+  func testAdoptingAnotherRecognizersTextContinuesWithoutAHole() {
+    // The backend stream dies mid-dictation. Its words are already on screen,
+    // so they become the prefix and the local model resumes from new audio.
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 9))
+    w.adopt(committedText: "  the stream got this far  ")
+    XCTAssertTrue(w.hasCommitted)
+    XCTAssertEqual(w.pendingAudio.count, 0, "the dead stream's audio is not re-decoded")
+    XCTAssertEqual(
+      w.transcript(tail: "and the local model continues"),
+      "the stream got this far and the local model continues")
   }
 
   func testResetForgetsTheTurn() {
