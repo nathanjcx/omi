@@ -63,6 +63,23 @@ final class VoiceTypeCommandParserTests: XCTestCase {
     XCTAssertEqual(VoiceTypeCommandParser.payloadAssumingDictation("tape - send it"), "Send it")
   }
 
+  func testAProbeMishearingOfTheWakeWordStillOpensLikeDictation() {
+    // The on-device probe mishears "type" from a short opening clip. These are
+    // the misses observed live; each must claim the turn mid-hold so the notch
+    // turns red while talking, not only at key-up.
+    for opening in ["Two. Okay. So hello.", "Tie, hello world", "Typed the report", "tape - send it"] {
+      XCTAssertTrue(VoiceTypeCommandParser.opensLikeDictation(opening), "\(opening) should open like a dictation")
+    }
+  }
+
+  func testOpensLikeDictationDoesNotClaimAnOrdinaryQuestionOrBareToken() {
+    for opening in ["what is on my calendar", "tell me a joke", "Two", "Tie", "hello there"] {
+      XCTAssertFalse(VoiceTypeCommandParser.opensLikeDictation(opening), "\(opening) must not open like a dictation")
+    }
+    // The real wake word still opens it.
+    XCTAssertTrue(VoiceTypeCommandParser.opensLikeDictation("Type hello"))
+  }
+
   func testAClaimedTurnWithNoWakeWordAtAllKeepsEveryWord() {
     // No mishearing to drop: the whole transcript is the dictation. A word
     // that merely begins with the wake word is never cut in half.
@@ -127,6 +144,16 @@ final class VoiceTypeSessionTests: XCTestCase {
     XCTAssertEqual(session.payload(from: "Tie, hello world, how are you?"), "Hello world, how are you?")
     XCTAssertEqual(session.deliver("Hello world, how are you?"), .pasted("Hello world, how are you?"))
     XCTAssertEqual(sink.pasted, ["Hello world, how are you?"])
+  }
+
+  func testALenientClaimLatchesOnAMisheardWakeWordButStrictDoesNot() {
+    let (strict, _) = makeSession()
+    XCTAssertFalse(strict.claim(transcript: "Two. Okay. So hello."), "strict claim rejects a mishearing")
+    let (lenient, _) = makeSession()
+    XCTAssertTrue(lenient.claim(transcript: "Two. Okay. So hello.", lenient: true))
+    XCTAssertTrue(lenient.claimsTurn)
+    // The closing transcript then strips the misheard token from the paste.
+    XCTAssertEqual(lenient.payload(from: "Two. Okay. So hello."), "Okay. So hello.")
   }
 
   func testAProbeThatHearsAQuestionDoesNotLatch() {

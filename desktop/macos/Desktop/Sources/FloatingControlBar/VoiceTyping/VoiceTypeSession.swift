@@ -73,14 +73,23 @@ final class VoiceTypeSession {
   /// Decides from a transcript — a mid-hold probe's or the closing one —
   /// whether this turn dictates. Returns whether the turn belongs to voice
   /// typing. Latches only towards typing.
+  ///
+  /// - Parameter lenient: accept a close mishearing of the wake word, not just
+  ///   the exact word. The mid-hold probe passes this because the on-device
+  ///   model mishears "type" from a short opening clip; the closing decode
+  ///   uses the strict test.
   @discardableResult
-  func claim(transcript: String) -> Bool {
+  func claim(transcript: String, lenient: Bool = false) -> Bool {
     switch latch {
     case .blocked: return false
     case .typing: return true
     case .none: break
     }
-    guard case .typing = VoiceTypeCommandParser.decide(transcript) else { return false }
+    let dictates =
+      lenient
+      ? VoiceTypeCommandParser.opensLikeDictation(transcript)
+      : { if case .typing = VoiceTypeCommandParser.decide(transcript) { return true } else { return false } }()
+    guard dictates else { return false }
     return arm()
   }
 

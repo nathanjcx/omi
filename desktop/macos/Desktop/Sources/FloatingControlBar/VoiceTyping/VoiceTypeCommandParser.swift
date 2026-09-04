@@ -63,7 +63,36 @@ enum VoiceTypeCommandParser {
 
   /// Spellings a recognizer gives the spoken word "type" when it does not hear
   /// it as "type". Consulted only once the turn is already known to dictate.
-  private static let wakeWordMishearings = ["typed", "types", "typing", "tie", "tight", "tape", "typo", "tap"]
+  private static let wakeWordMishearings = [
+    "typed", "types", "typing", "tie", "tied", "tight", "tape", "typo", "tap", "two",
+  ]
+
+  /// Whether the opening of a still-growing transcript plausibly begins a
+  /// dictation — the documented wake word, or a close mishearing of it.
+  ///
+  /// The mid-hold probe decodes the first seconds of the hold with the
+  /// on-device model, which regularly mishears "type" from a short clip with
+  /// no preceding context ("Two", "Tie", "Typed"). `decide` is deliberately
+  /// strict and rejects those, so the turn was never recognised as a dictation
+  /// *during* the hold and the notch never turned red until the key came up.
+  /// This matcher is the looser test used only to claim the turn early: a
+  /// leading mishearing followed by a word boundary and at least one more
+  /// word. A real question rarely opens with one of these tokens, and the
+  /// closing decode still governs the pasted text.
+  static func opensLikeDictation(_ transcript: String) -> Bool {
+    if case .typing = decide(transcript) { return true }
+    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    let lowered = trimmed.lowercased()
+    for token in (wakeWords + wakeWordMishearings).sorted(by: { $0.count > $1.count })
+    where lowered.hasPrefix(token) {
+      let rest = trimmed.dropFirst(token.count)
+      guard let first = rest.unicodeScalars.first, separators.contains(first) else { continue }
+      let payload = rest.drop(while: { $0.unicodeScalars.allSatisfy(separators.contains) })
+      if !payload.isEmpty { return true }
+    }
+    return false
+  }
 
   /// The text to type from a transcript of a turn that is already known to be
   /// a dictation.

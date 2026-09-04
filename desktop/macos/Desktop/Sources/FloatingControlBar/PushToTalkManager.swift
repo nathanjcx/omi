@@ -3119,19 +3119,17 @@ class PushToTalkManager: ObservableObject {
         "PushToTalkManager: wake-word probe \(String(format: "%.1f", Double(clip.count / 2) / 16_000))s "
           + "→ \(text.map { "\"\($0.prefix(48))\"" } ?? "nil") in \(Int(Date().timeIntervalSince(started) * 1000))ms")
       guard let text else { return }
-      switch VoiceTypeCommandParser.decide(text) {
-      case .typing:
+      // Lenient: the on-device probe mishears "type" as "Two"/"Tie"/"Typed"
+      // from a short opening clip, and a strict match left the turn white for
+      // the whole hold. The closing decode still governs the pasted text.
+      if self.voiceTypeSession.claim(transcript: text, lenient: true) {
         self.voiceTypingProbeSchedule.decide()
-        if self.voiceTypeSession.claim(transcript: text) {
-          self.voiceTypingDidArm(turnID: turnID)
-        }
-      case .rejected:
-        // The wake word opens the utterance or it is not there; a later probe
-        // of a longer opening cannot change that. Only the closing transcript
-        // gets a second opinion.
+        self.voiceTypingDidArm(turnID: turnID)
+      } else if case .rejected = VoiceTypeCommandParser.decide(text) {
+        // Not a viable prefix of any wake word or mishearing — a later probe of
+        // a longer opening cannot change that. The closing transcript still
+        // gets a lenient second opinion at key-up.
         self.voiceTypingProbeSchedule.decide()
-      case .undecided:
-        break
       }
     }
   }
