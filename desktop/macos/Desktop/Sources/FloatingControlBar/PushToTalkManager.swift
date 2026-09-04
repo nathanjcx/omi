@@ -3056,27 +3056,6 @@ class PushToTalkManager: ObservableObject {
     omniPreconnectBuffer.removeAll()
   }
 
-  /// Applies to a dictation the same lexical correction a spoken question has
-  /// always received: local string matching against on-screen keywords, no
-  /// model and no network. Only the dictated text is corrected. The wake word
-  /// is exempt: the corrector once rewrote it from a screen keyword ("Type" →
-  /// "typ") and the turn was never recognised as a dictation at all.
-  private func correctedForTyping(_ transcript: String) -> String {
-    correctedForTyping(transcript, keywords: currentContextSnapshot?.keywords ?? [])
-  }
-
-  private func correctedForTyping(_ transcript: String, keywords: [String]) -> String {
-    guard !transcript.isEmpty else { return transcript }
-    // Name-like keywords only. The corrector's greeting rule treats the word
-    // after "hello" as a name to respell from the screen; handed the raw OCR
-    // vocabulary it rewrote "hello there" as "hello then" (observed live,
-    // 2026-09-04) because "then" was on screen.
-    let hints = DictationPolisher.spellingHints(from: keywords)
-    return VoiceTypeCommandParser.correctingPayload(transcript) { payload in
-      PTTTranscriptContextualCorrector.correct(payload, keywords: hints)
-    }
-  }
-
   // MARK: - Voice typing
 
   /// When the opening of the hold is decoded for the wake word. Advisory: the
@@ -3140,7 +3119,7 @@ class PushToTalkManager: ObservableObject {
         "PushToTalkManager: wake-word probe \(String(format: "%.1f", Double(clip.count / 2) / 16_000))s "
           + "→ \(text.map { "\"\($0.prefix(48))\"" } ?? "nil") in \(Int(Date().timeIntervalSince(started) * 1000))ms")
       guard let text else { return }
-      switch VoiceTypeCommandParser.decide(self.correctedForTyping(text)) {
+      switch VoiceTypeCommandParser.decide(text) {
       case .typing:
         self.voiceTypingProbeSchedule.decide()
         if self.voiceTypeSession.claim(transcript: text) {
@@ -3194,7 +3173,7 @@ class PushToTalkManager: ObservableObject {
     Task { @MainActor [weak self] in
       let decoded = await PTTLanguageIdentifier.shared.transcribe(pcm16k: opening)
       guard let self, self.voiceTurnCoordinator.activeTurnID == turnID else { return }
-      if let decoded, self.voiceTypeSession.claim(transcript: self.correctedForTyping(decoded)) {
+      if let decoded, self.voiceTypeSession.claim(transcript: decoded) {
         log("PushToTalkManager: closing decode caught a dictation the probes missed — not committing")
         self.finishVoiceTypingTurn(turnID: turnID, audio: turnAudio, knownTranscript: nil)
         return
@@ -3322,8 +3301,12 @@ class PushToTalkManager: ObservableObject {
       return run
     }
     guard let transcript = run.transcript else { return run }
-    let corrected = correctedForTyping(transcript, keywords: keywords)
-    guard let payload = voiceTypeSession.payload(from: corrected) else {
+    // The chat corrector (`PTTTranscriptContextualCorrector`) deliberately does
+    // not run here. Its greeting rule treats the first word of "<word>, …" as a
+    // name to respell from the screen: live it turned "So, this is a test" into
+    // "Sil, this is a test" and "hello there" into "hello then". Dictation is
+    // free text; spelling of names is the polisher's job, with hints.
+    guard let payload = voiceTypeSession.payload(from: transcript) else {
       run.notADictation = true
       return run
     }

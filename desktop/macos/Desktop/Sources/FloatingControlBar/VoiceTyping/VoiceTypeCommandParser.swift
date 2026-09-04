@@ -86,32 +86,6 @@ enum VoiceTypeCommandParser {
     return capitalizingFirstWord(trimmed)
   }
 
-  /// Applies a transcript correction to the dictated text only, never to the
-  /// wake word.
-  ///
-  /// The on-screen keyword corrector is run on every transcript so names and
-  /// jargon visible on screen are spelled the way the screen spells them.
-  /// Observed live: with a window title containing "typ", it rewrote the wake
-  /// word itself — "Type, hello world" became "typ, hello world" — and the
-  /// parser then rejected the turn, so the realtime model, hearing "type …",
-  /// spawned an agent to do the typing. So the wake word is split off before
-  /// correction and put back verbatim afterwards; a transcript that is not a
-  /// typing command is returned untouched.
-  static func correctingPayload(_ transcript: String, using correct: (String) -> String) -> String {
-    guard case .typing = decide(transcript) else { return transcript }
-    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-    for wake in wakeWords.sorted(by: { $0.count > $1.count })
-    where trimmed.prefix(wake.count).lowercased() == wake {
-      let rest = trimmed.dropFirst(wake.count)
-      let payloadStart = rest.firstIndex(where: { !$0.unicodeScalars.allSatisfy(separators.contains) })
-      guard let payloadStart else { return transcript }
-      let prefix = String(trimmed[..<payloadStart])
-      let payload = String(trimmed[payloadStart...])
-      return prefix + correct(payload)
-    }
-    return transcript
-  }
-
   /// Dictation starts a sentence. The recognizer lowercases the first word
   /// because it heard it mid-utterance, right after the wake word, so it is
   /// restored here.

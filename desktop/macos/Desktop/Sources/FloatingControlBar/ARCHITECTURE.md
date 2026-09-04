@@ -58,10 +58,10 @@ owns the dictate-or-ask decision and the delivery, and nothing else does.
      (omni STT, batch STT after a warm-wait) hands it in as `knownTranscript`
      so the audio is not transcribed twice. Every fallback is recorded
      (`area=voice_typing`).
-  2. **Correct** the dictated text against on-screen keywords
-     (`PTTTranscriptContextualCorrector`), never the wake word
-     (`correctingPayload`) — live, a window title containing "typ" once
-     rewrote "Type" itself.
+  2. **No chat corrector.** `PTTTranscriptContextualCorrector` is not run on
+     a dictation. Its greeting rule respells the first word of "<word>, …"
+     from on-screen text; live it turned "So, this is a test" into "Sil, …"
+     and "hello there" into "hello then". Names are the polisher's job.
   3. **Format** (`DictationFormatter`, always): spoken fillers out, the
      punctuation they leave behind repaired, first letter capitalized.
      English-only fillers ("er") are stripped only for English.
@@ -104,7 +104,8 @@ owns the dictate-or-ask decision and the delivery, and nothing else does.
   like a spoken question. The continuity key is derived from the turn.
 
 Guards: `Tests/VoiceTypingTests.swift` (parser, session, formatter, polisher
-acceptance, transcriber fallback order, probe schedule, route policy).
+acceptance and hint filtering, transcriber fallback order, probe schedule,
+route policy).
 Harness: `omi-ctl action ptt_manager_turn pcm=<s16le 16k> pace_ms=100 settle_ms=4000`
 drives a real-time hold through the production chunk path and reports
 `voice_typing_*` diagnostics (`delivery`, `transcriber`, `polished`).

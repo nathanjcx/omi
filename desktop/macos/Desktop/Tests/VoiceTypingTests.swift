@@ -71,43 +71,6 @@ final class VoiceTypeCommandParserTests: XCTestCase {
   }
 }
 
-final class VoiceTypeWakeWordCorrectionTests: XCTestCase {
-
-  func testTheWakeWordIsNeverHandedToTheCorrector() {
-    // Live: a window title containing "typ" made the keyword corrector rewrite
-    // "Type" itself, so the turn never parsed as a dictation and the model
-    // spawned an agent to type instead.
-    var seen: [String] = []
-    let out = VoiceTypeCommandParser.correctingPayload("Type, hello world") { payload in
-      seen.append(payload)
-      return payload.replacingOccurrences(of: "Type", with: "typ").replacingOccurrences(of: "world", with: "World")
-    }
-    XCTAssertEqual(seen, ["hello world"])
-    XCTAssertEqual(out, "Type, hello World")
-    XCTAssertEqual(VoiceTypeCommandParser.decide(out), .typing(payload: "Hello World"))
-  }
-
-  func testAWakeWordCorrectorCannotDisarmTheTurn() {
-    let hostile: (String) -> String = { $0.replacingOccurrences(of: "Type", with: "typ") }
-    for transcript in ["Type hello", "Type. Hello there.", "type out the report", "Type this: send it"] {
-      let out = VoiceTypeCommandParser.correctingPayload(transcript, using: hostile)
-      if case .typing = VoiceTypeCommandParser.decide(out) { continue }
-      XCTFail("\(transcript) → \(out) no longer dictates")
-    }
-  }
-
-  func testTextThatIsNotYetACommandIsLeftAlone() {
-    let out = VoiceTypeCommandParser.correctingPayload("Ty") { _ in
-      XCTFail("must not correct")
-      return ""
-    }
-    XCTAssertEqual(out, "Ty")
-    XCTAssertEqual(
-      VoiceTypeCommandParser.correctingPayload("what is on my calendar") { _ in "changed" },
-      "what is on my calendar")
-  }
-}
-
 @MainActor
 final class VoiceTypeSessionTests: XCTestCase {
 
@@ -577,54 +540,6 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
     }
     schedule.reset()
     XCTAssertEqual(schedule, VoiceTypeWakeWordProbeSchedule())
-  }
-}
-
-final class DictationLexicalCorrectionTests: XCTestCase {
-
-  func testAnOnScreenNameCorrectsAGreetingTarget() {
-    // What the corrector actually covers: a name in a greeting construct.
-    XCTAssertEqual(
-      PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: ["Nathan"]),
-      "send hi to Nathan")
-  }
-
-  func testCorrectionIsIdempotent() {
-    let once = PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: ["Nathan"])
-    let twice = PTTTranscriptContextualCorrector.correct(once, keywords: ["Nathan"])
-    XCTAssertEqual(once, twice)
-  }
-
-  func testTheCorrectorLeavesAWakeWordIntact() {
-    // If it altered the opening word at all, the parser would stop
-    // recognising the command.
-    for transcript in [
-      "Type.",
-      "Type. I don't know.",
-      "Type, I don't know why I did that.",
-      "Type. Okay, so this is decent I guess.",
-    ] {
-      XCTAssertEqual(
-        PTTTranscriptContextualCorrector.correct(transcript, keywords: []), transcript,
-        "the corrector must not touch \(transcript)")
-    }
-  }
-
-  func testNoKeywordsLeavesDictationAlone() {
-    // With Screen Recording denied there are no keywords, and dictation must
-    // still be pasted exactly as heard.
-    XCTAssertEqual(
-      PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: []),
-      "send hi to nate")
-  }
-
-  func testAnOnScreenNameOutsideAGreetingIsNotCorrected() {
-    // The limit of the local corrector, pinned so it is not mistaken for
-    // general proper-noun correction. Closing this gap is the polisher's job:
-    // it gets the same keywords as spelling hints.
-    XCTAssertEqual(
-      PTTTranscriptContextualCorrector.correct("send it to nate", keywords: ["Nathan"]),
-      "send it to nate")
   }
 }
 
