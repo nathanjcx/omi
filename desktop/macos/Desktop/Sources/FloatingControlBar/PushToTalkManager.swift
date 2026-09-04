@@ -337,14 +337,22 @@ class PushToTalkManager: ObservableObject {
   // wherever transcriptSegments is reset.
   private var seenFinalSegmentIDs: Set<String> = []
   private var lastInterimText: String = ""
-  /// Owns the "type <text>" branch of a turn: whether this utterance dictates
-  /// into the focused app instead of asking Omi, and the keystrokes if it does.
+  /// Delivers the "type <text>" branch of a turn: one paste into whichever app
+  /// owns the caret, once the key has come up and the words are final.
   private let voiceTypeSession = VoiceTypeSession()
-  private var voiceTypingProbeInFlight = false
-  private var voiceTypingProbeAt: Date?
-  /// Cadence of the on-device decode during a hold. Fast enough to read as live,
-  /// slow enough that a decode is finished well before the next one is due.
-  private static let voiceTypingProbeInterval: TimeInterval = 0.2
+  /// The whole hold's audio. Nothing is decoded from it and nothing is
+  /// delivered until key-up, which is what lets the recognizer see every word
+  /// with the context that follows it.
+  private var voiceTypingUtterance = VoiceTypeUtterance(maxBytes: PushToTalkManager.maxBatchAudioBytes)
+  /// Set once the opening wake-word check has recognised a dictation and
+  /// released the hub turn. Routing state only — it never decides any text.
+  private var voiceTypingArmed = false
+  private var voiceTypingArmProbeInFlight = false
+  private var voiceTypingArmProbesSpent = 0
+  /// Which recognizer produced the last delivered dictation, and why it was not
+  /// the stronger one. Diagnostics; bounded strings.
+  private var voiceTypingLastSource: VoiceTypeTranscript.Source?
+  private var voiceTypingLastDegradation: VoiceTypeTranscriber.Degradation?
   /// 60s of 16 kHz mono s16le.
   private var hasMicPermission: Bool = false
   private var isCurrentSessionFollowUp = false
@@ -524,7 +532,7 @@ class PushToTalkManager: ObservableObject {
       RealtimeHubController.shared.abandonInputPreparation(turnID: turnID)
       // A dictation has already left the hub behind; the warm deadline firing
       // under it must not start the omni cascade over a turn that types.
-      guard !voiceTypeSession.claimsTurn else {
+      guard !voiceTypingArmed else {
         log("PushToTalkManager: hub warm deadline ignored — turn is a dictation")
         return
       }
@@ -789,8 +797,8 @@ class PushToTalkManager: ObservableObject {
     transcriptSegments = []
     seenFinalSegmentIDs.removeAll()
     lastInterimText = ""
-    voiceTypeSession.begin()
-    resetVoiceTypingSources()
+    voiceTypingTurnGeneration &+= 1
+    resetVoiceTypingPipeline()
     currentContextSnapshot = nil
 
     // Play start-of-PTT sound
@@ -860,8 +868,8 @@ class PushToTalkManager: ObservableObject {
       transcriptSegments = []
       seenFinalSegmentIDs.removeAll()
       lastInterimText = ""
-      voiceTypeSession.begin()
-      resetVoiceTypingSources()
+      voiceTypingTurnGeneration &+= 1
+      resetVoiceTypingPipeline()
       currentContextSnapshot = nil
       let preOverlayImage = captureTurnScreenEvidence()
       captureContextAndStartAudio(preOverlayImage: preOverlayImage)
@@ -918,15 +926,12 @@ class PushToTalkManager: ObservableObject {
     contextCaptureTask = nil
     micCaptureStartInFlight = false
     stopAudioTranscription(discardBufferedAudio: discardBufferedAudio, parkWarm: parkWarm)
-    voiceTypeSession.abandon()
-    // A dictation's closing flush outlives the reducer's terminal: it is still
-    // decoding the last window and waiting on the stream's last utterance.
-    // Resetting here emptied that window under it, so the final word of every
-    // hold was lost ("talk soon." typed as "talk"). The flush stops the stream
-    // itself; the window resets when the next turn begins.
-    if !voiceTypeSession.isFlushing(token: voiceTypingFlushToken) {
-      resetVoiceTypingSources()
-    }
+    // Unconditional, unlike the streaming design this replaced: a dictation
+    // still resolving past the terminal already holds its own copy of the
+    // audio, so there is nothing here it can be robbed of. That is what let the
+    // "leave the window alone while a flush is open" exception go away — it
+    // existed because resetting here lost the last word of every hold.
+    resetVoiceTypingPipeline()
     transcriptSegments = []
     seenFinalSegmentIDs.removeAll()
     lastInterimText = ""
@@ -1061,7 +1066,7 @@ class PushToTalkManager: ObservableObject {
       let turnID = currentVoiceTurnID,
       phase?.isRecording == true
     else { return false }
-    guard isHubMode || isWaitingForHub || voiceTypeSession.claimsTurn else { return false }
+    guard isHubMode || isWaitingForHub || voiceTypingArmed else { return false }
     ingestMicChunk(
       pcm16k,
       generation: micCaptureGeneration,
@@ -1074,16 +1079,13 @@ class PushToTalkManager: ObservableObject {
   /// most recent turn. Bounded scalars only.
   func voiceTypingAutomationDiagnostics() -> [String: String] {
     [
-      "voice_typing_claimed": voiceTypeSession.claimsTurn ? "true" : "false",
-      "voice_typing_typed_chars": "\(voiceTypeSession.typedCount)",
-      "voice_typing_committed_chars": "\(voiceTypingWindow.committedText.count)",
-      "voice_typing_consumed_seconds": String(
-        format: "%.1f", Double(voiceTypingWindow.consumedBytes / 2) / 16_000),
-      "voice_typing_cloud": voiceTypingCloudFailed
-        ? "failed"
-        : (voiceTypingCloudConnected ? "connected" : (voiceTypingCloudService == nil ? "none" : "connecting")),
-      "voice_typing_cloud_finals": "\(voiceTypingCloudFinalsAdopted)",
-      "voice_typing_hub_released": voiceTypingReleasedHubTurn ? "true" : "false",
+      "voice_typing_armed": voiceTypingArmed ? "true" : "false",
+      "voice_typing_typed_chars": "\(voiceTypeSession.deliveredCount)",
+      "voice_typing_held_seconds": String(format: "%.1f", voiceTypingUtterance.seconds),
+      "voice_typing_truncated": voiceTypingUtterance.didTruncate ? "true" : "false",
+      "voice_typing_arm_probes": "\(voiceTypingArmProbesSpent)",
+      "voice_typing_source": voiceTypingLastSource?.rawValue ?? "none",
+      "voice_typing_degradation": voiceTypingLastDegradation?.rawValue ?? "none",
     ]
   }
 
@@ -1346,11 +1348,11 @@ class PushToTalkManager: ObservableObject {
     activeTracer?.end("ptt_recording")
 
     // A dictation closes the same way on every route: the key came up, so the
-    // last words are flushed to the focused app and nothing is asked of any
-    // model. Decided before the route branches, because the reducer may have
-    // moved the route under a long hold (warm-wait timeout, hub ready) and
-    // none of those transitions change what a typing turn does at key-up.
-    if voiceTypeSession.claimsTurn {
+    // hold is transcribed once and pasted, and nothing is asked of any model.
+    // Decided before the route branches, because the reducer may have moved the
+    // route under a long hold (warm-wait timeout, hub ready) and none of those
+    // transitions change what a typing turn does at key-up.
+    if voiceTypingArmed {
       activeTracer = nil
       finishVoiceTypingTurn(turnID: turnID)
       return
@@ -1777,9 +1779,7 @@ class PushToTalkManager: ObservableObject {
     // next one between transcription and terminal cleanup.
     contextCaptureTask?.cancel()
     contextCaptureTask = nil
-    if !query.isEmpty {
-      query = PTTTranscriptContextualCorrector.correct(query, keywords: contextKeywords)
-    }
+    query = keywordCorrected(query, keywords: contextKeywords)
     let hasQuery = !query.isEmpty
     let wasFollowUp = isCurrentSessionFollowUp
 
@@ -1833,11 +1833,17 @@ class PushToTalkManager: ObservableObject {
     voiceTurnCoordinator.publish(.transcriptionFinal(turnID: turnID, text: query))
 
     // "Type <text>" dictates into whatever app owns the caret. The turn is
-    // complete once the last keystroke lands: it asks Omi nothing, so no query
-    // is dispatched and no response is awaited.
-    if case .typed(let typed) = voiceTypeSession.finish(transcript: query) {
-      log("PushToTalkManager: voice typing consumed turn (\(query.count) chars)")
-      recordVoiceTypingExchange(utterance: query, typed: typed, turnID: turnID)
+    // complete once the paste lands: it asks Omi nothing, so no query is
+    // dispatched and no response is awaited.
+    //
+    // This route already holds a transcript of the complete utterance — its
+    // provider produced one — so it needs no decode of its own and joins the
+    // pipeline at the paste.
+    if case .typed(let typed) = deliverDictation(
+      fromTranscript: query, keywords: contextKeywords, generation: voiceTypingTurnGeneration)
+    {
+      log("PushToTalkManager: voice typing consumed turn (\(typed.count) chars)")
+      recordVoiceTypingExchange(typed: typed, turnID: turnID)
       voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
       return
     }
@@ -2077,34 +2083,37 @@ class PushToTalkManager: ObservableObject {
     }
   }
 
-  /// Closes an offline turn. Whatever the probes typed is completed from a final
-  /// on-device decode and journaled, exactly as the hub route does; a turn that
-  /// never dictated simply ends, since there is no model available to answer it.
+  /// Closes an offline turn. The hold is transcribed on-device and pasted,
+  /// exactly as the hub route does; a turn that was not a dictation simply
+  /// ends, since there is no model available to answer it.
+  ///
+  /// Offline is where paste-on-release loses the least. The recognizer that
+  /// decides the words is the same one either way — it just gets the whole
+  /// utterance now instead of a six-second window of it.
   private func finishOnDeviceDictationTurn(turnID: VoiceTurnID) {
-    let audio = voiceTypingWindowTailForFlush()
-    let claimed = voiceTypeSession.claimsTurn
-    let flushToken = voiceTypeSession.beginFlush()
+    let audio = captureVoiceTypingAudio()
+    let keywords = currentContextSnapshot?.keywords ?? []
+    let generation = voiceTypingTurnGeneration
     log(
-      "PushToTalkManager: closing offline turn (\(voiceTypeSession.typedCount) chars typed)")
+      "PushToTalkManager: closing offline turn (\(String(format: "%.1f", voiceTypingUtterance.seconds))s held)")
+    guard let audio else {
+      log("PushToTalkManager: offline turn held no speech — no provider to answer it")
+      voiceTurnCoordinator.publish(.finish(turnID: turnID, reason: .providerFailed))
+      return
+    }
     Task { @MainActor [weak self] in
-      let decoded = await PTTLanguageIdentifier.shared.transcribe(pcm16k: audio)
       guard let self else { return }
-      // The whole utterance, not just this window's decode: the planner diffs
-      // against what is on screen, so handing it only the tail would delete
-      // every committed word.
-      let text = decoded.map { self.correctedForTyping(self.voiceTypingWindow.transcript(tail: $0)) }
-      let completion = self.voiceTypeSession.endFlush(token: flushToken, finalTranscript: text)
-      if case .typed(let typed) = completion {
-        self.recordVoiceTypingExchange(utterance: text ?? typed, typed: typed, turnID: turnID)
-      }
+      let completion = await self.resolveDictation(
+        audio: audio, keywords: keywords, generation: generation)
       guard self.voiceTurnCoordinator.activeTurnID == turnID else { return }
-      if claimed || completion != .none {
+      if case .typed(let typed) = completion {
+        self.recordVoiceTypingExchange(typed: typed, turnID: turnID)
         self.voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
-      } else {
-        // Not a dictation. Offline there is nothing that can answer it.
-        log("PushToTalkManager: offline turn was not a dictation — no provider to answer it")
-        self.voiceTurnCoordinator.publish(.finish(turnID: turnID, reason: .providerFailed))
+        return
       }
+      // Not a dictation. Offline there is nothing that can answer it.
+      log("PushToTalkManager: offline turn was not a dictation — no provider to answer it")
+      self.voiceTurnCoordinator.publish(.finish(turnID: turnID, reason: .providerFailed))
     }
   }
 
@@ -2137,7 +2146,7 @@ class PushToTalkManager: ObservableObject {
       return
     }
     // A dictation never hands its audio to the hub, however late the hub wakes.
-    if voiceTypeSession.claimsTurn {
+    if voiceTypingArmed {
       log("PushToTalkManager: realtime hub \(ready ? "ready" : "timed out") under a dictation — ignored")
       return
     }
@@ -2230,7 +2239,7 @@ class PushToTalkManager: ObservableObject {
       }
       return
     }
-    if let turnID = currentVoiceTurnID, voiceTypeSession.claimsTurn {
+    if let turnID = currentVoiceTurnID, voiceTypingArmed {
       finishVoiceTypingTurn(turnID: turnID)
       return
     }
@@ -2462,32 +2471,25 @@ class PushToTalkManager: ObservableObject {
     _ audioData: Data, generation: UInt64, turnID: VoiceTurnID, batchMode: Bool
   ) {
     pttLifecycle.ingestAudioChunk(audioData)
-    // Every route, unconditionally. Feeding this per-branch meant the hub's
-    // warm-wait — which matches none of the branches below — never reached
-    // typing, so a wake word spoken while the hub connected was lost outright
-    // and the turn silently became a question. The window is also the turn's
-    // timeline: the backend stream's utterances are committed against it by
-    // position, so it must see every byte, not just the bytes decoded locally.
-    voiceTypingWindow.append(audioData)
-    // Once the turn is a dictation it has its own pipeline, whatever route the
-    // reducer picked at key-down: mic → on-device probes for the moving edge,
-    // the backend stream for the finished stretches, keystrokes out. No model
-    // is asked anything, so no model is fed. Route transitions the reducer
-    // makes from here on (warm-wait timeout, hub ready) do not reach the
-    // audio, which is what lets a hold run for as long as the user likes.
-    if voiceTypeSession.claimsTurn {
+    // Every route, unconditionally, and before any branch below. Feeding this
+    // per-branch meant the hub's warm-wait — which matches none of the branches
+    // — never reached typing, so a wake word spoken while the hub connected was
+    // lost outright and the turn silently became a question.
+    voiceTypingUtterance.append(audioData)
+    // The only work a hold does now. Routing only: it decides whether to
+    // release the hub turn early, never what any character will be.
+    probeForDictationRouting(turnID: turnID)
+    // Once the turn is a dictation it feeds nothing but its own buffer,
+    // whatever route the reducer picked at key-down. No model is asked
+    // anything, so no model is fed — and route transitions the reducer makes
+    // from here on (warm-wait timeout, hub ready) do not reach the audio, which
+    // is what lets a hold run for as long as the user likes.
+    if voiceTypingArmed {
       appendBatchAudioBounded(audioData, turn: generation)
-      if voiceTypingCloudConnected {
-        voiceTypingCloudService?.sendAudio(audioData)
-      }
-      probeVoiceTyping(turnID: turnID)
       return
     }
     if isWaitingForHub {
-      // Type while the hub is still connecting rather than after: the
-      // on-device model needs no socket, so there is nothing to wait for.
       appendBatchAudioBounded(audioData, turn: generation)
-      probeVoiceTyping(turnID: turnID)
       return
     }
     if isHubMode {
@@ -2496,14 +2498,10 @@ class PushToTalkManager: ObservableObject {
       // closed capture token and cannot leak into the next turn.
       RealtimeHubController.shared.feedAudio(audioData, turnID: turnID)
       appendBatchAudioBounded(audioData, turn: generation)
-      probeVoiceTyping(turnID: turnID)
       return
     }
     if isOnDeviceASR {
-      // Offline: the probes are the only transcript there is, so they are
-      // what makes the text appear while the key is still held.
       appendBatchAudioBounded(audioData, turn: generation)
-      probeVoiceTyping(turnID: turnID)
       return
     }
     if isOmniSTT {
@@ -3097,268 +3095,217 @@ class PushToTalkManager: ObservableObject {
     return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  /// Applies to a dictation the same lexical correction a spoken question has
-  /// always received.
+  /// The turn's transcript, spelled the way the screen spells things.
   ///
   /// Free in latency terms — local string matching against on-screen keywords,
-  /// no model and no network — so accuracy costs dictation none of its speed.
-  /// Deterministic, so correcting every probe cannot introduce flicker: two
-  /// decodes that agreed still agree after correction, which is what the
-  /// stabilizer keys on.
+  /// no model and no network — so accuracy costs the turn nothing.
   ///
-  /// Only dictation went without this. `sendTranscript` corrects the question
-  /// path, but voice typing decoded straight from the recognizer, so "send it
-  /// to nate" stayed "nate" with "Nathan" plainly on screen.
-  ///
-  /// Only the dictated text is corrected. The wake word is exempt: the
-  /// corrector once rewrote it from a screen keyword ("Type" → "typ") and the
-  /// turn was never recognised as a dictation at all.
-  private func correctedForTyping(_ transcript: String) -> String {
-    correctedForTyping(transcript, keywords: currentContextSnapshot?.keywords ?? [])
-  }
-
-  /// Same, against a pinned keyword set: the closing flush runs after terminal
-  /// cleanup has cleared the context snapshot, and correcting the final text
-  /// against nothing would rewrite the corrections already on screen.
-  private func correctedForTyping(_ transcript: String, keywords: [String]) -> String {
+  /// A dictation's wake word is exempt. The corrector once rewrote it from a
+  /// screen keyword ("Type" → "typ"), the turn stopped parsing as a dictation,
+  /// and the realtime model — hearing "type …" — spawned an agent to do the
+  /// typing. That is the worst outcome available: not a missed dictation but an
+  /// unrequested action. A question is corrected whole, as it always was.
+  private func keywordCorrected(_ transcript: String, keywords: [String]) -> String {
     guard !transcript.isEmpty else { return transcript }
-    return VoiceTypeCommandParser.correctingPayload(transcript) { payload in
-      PTTTranscriptContextualCorrector.correct(payload, keywords: keywords)
+    if case .typing = VoiceTypeCommandParser.decide(transcript) {
+      return VoiceTypeCommandParser.correctingPayload(transcript) { payload in
+        PTTTranscriptContextualCorrector.correct(payload, keywords: keywords)
+      }
     }
+    return PTTTranscriptContextualCorrector.correct(transcript, keywords: keywords)
   }
 
-  /// The on-device decode of the current (uncommitted) window — the moving
-  /// edge of the dictation.
-  private var voiceTypingLocalTail = ""
-  /// Previous probe's decode of the current window, for stability checks.
-  private var voiceTypingLastProbeTail = ""
-  /// Set only when the streaming socket actually failed, so the pipeline stops
-  /// waiting on it for evidence rather than on a transcript that stopped.
-  private var voiceTypingCloudFailed = false
-  /// The backend streaming recognizer for this turn, opened once a dictation
-  /// is recognised. It commits finished utterances into the window by time.
-  private var voiceTypingCloudService: TranscriptionService?
-  /// True between the socket's open and its close. Audio is sent live only
-  /// while this holds; anything the socket missed is still in the window and
-  /// is replayed to it on (re)connect.
-  private var voiceTypingCloudConnected = false
-  /// Turn-relative byte offset of the stream's own time zero: the window's
-  /// consumed edge when the socket opened and was handed the pending audio.
-  private var voiceTypingCloudOriginBytes = 0
-  /// Finished utterances the stream has committed this turn (diagnostics).
-  private var voiceTypingCloudFinalsAdopted = 0
-  /// Set once a dictation has released its hub turn, so key-up does not
-  /// cancel it a second time.
-  private var voiceTypingReleasedHubTurn = false
-  /// Bounds the cost of each probe so a hold can run as long as the user likes,
-  /// and carries the turn's timeline for the stream's commits.
-  private var voiceTypingWindow = VoiceTypeDecodeWindow()
-
-  /// The audio a closing flush still has to decode: the uncommitted window
-  /// only, with any quiet lead-in trimmed. After a stream commit the window
-  /// usually opens on the pause that ended the utterance, and a decoder handed
-  /// only room tone invents words rather than returning nothing.
-  private func voiceTypingWindowTailForFlush() -> Data {
-    VoiceTypeAudioTrim.trimmingLeadingSilence(voiceTypingWindow.pendingAudio)
-  }
-
-  /// Whether the backend stream is currently in a position to commit text.
-  private var voiceTypingCloudIsHealthy: Bool {
-    voiceTypingCloudConnected && !voiceTypingCloudFailed
-  }
-
-  /// Hands the session the whole utterance so far: every committed stretch,
-  /// whichever recognizer froze it, plus the on-device decode of the window.
-  private func pushVoiceTypingTranscript() {
-    let settled = voiceTypingSettleOnNextPush
-    voiceTypingSettleOnNextPush = false
-    voiceTypeSession.update(
-      transcript: correctedForTyping(voiceTypingWindow.transcript(tail: voiceTypingLocalTail)),
-      isSettled: settled)
-  }
-
-  private func resetVoiceTypingSources() {
-    voiceTypingLocalTail = ""
-    voiceTypingLastProbeTail = ""
-    voiceTypingCloudFailed = false
-    voiceTypingCloudConnected = false
-    voiceTypingCloudOriginBytes = 0
-    voiceTypingCloudFinalsAdopted = 0
-    voiceTypingReleasedHubTurn = false
-    voiceTypingSettleOnNextPush = false
-    voiceTypingCloudService?.stop(discardBufferedAudio: true)
-    voiceTypingCloudService = nil
-    voiceTypingWindow.reset()
-  }
-
-  /// On the STT routes the route's own transcript *is* the utterance, so it
-  /// drives typing directly. Deliberately not routed through the two-source
-  /// arbitration: that slot belongs to the dictation upgrade stream, and
-  /// letting a route transcript occupy it would outrank the local decode that
-  /// recognises the wake word.
-  private func feedVoiceTyping() {
-    voiceTypeSession.update(transcript: correctedForTyping(utteranceSoFar))
-  }
-
-  /// Transcribes the turn's audio on-device while the key is still held.
+  /// Bumped by every turn start. A transcription that outlives its turn checks
+  /// this before pasting, so a slow recognizer can never deliver one hold's
+  /// dictation into the next one.
+  private var voiceTypingTurnGeneration = 0
+  /// How much of a hold the wake-word check listens to, in seconds of audio.
   ///
-  /// The realtime hub does not report the user's own words until after commit,
-  /// which is far too late either to type them as they are spoken or to decide
-  /// that this turn dictates instead of asks. The multilingual Parakeet model is
-  /// already loaded and runs ~100x realtime, so re-decoding the growing buffer a
-  /// few times a second is what makes "hold, say type, watch it appear" feel
-  /// immediate on the route most users are on.
-  private func probeVoiceTyping(turnID: VoiceTurnID) {
-    guard !voiceTypingProbeInFlight else { return }
-    let now = Date()
-    if let last = voiceTypingProbeAt, now.timeIntervalSince(last) < Self.voiceTypingProbeInterval {
-      return
-    }
-    // Typing's own buffer, not the shared PTT one. The shared buffer stops
-    // growing at its own cap, and a tail that never changes again is what made
-    // typing stop mid-sentence on a long hold.
-    let pending = voiceTypingWindow.pendingAudio
-    // Room tone only matters before the first word; after that the window
-    // starts mid-speech and there is no lead-in to trim.
-    let audio =
-      voiceTypingWindow.hasCommitted
-      ? pending : VoiceTypeAudioTrim.trimmingLeadingSilence(pending)
-    // Below ~0.4s the decoder has nothing to say.
-    guard audio.count >= 12_800 else { return }
-    voiceTypingProbeInFlight = true
-    voiceTypingProbeAt = now
-    // The window the decoder was handed. A stream commit that lands while the
-    // decode runs drops audio from the front of the window; the result below is
-    // then a decode of audio that is partly committed and must not be typed
-    // over the stream's text.
-    let consumedAtProbe = voiceTypingWindow.consumedBytes
+  /// Two attempts, then it gives up. The first is long enough to hold "type "
+  /// plus a word; the second catches a speaker who cleared their throat first.
+  /// Both only ever *promote* a turn to dictation, and neither produces a
+  /// character the user sees — the text always comes from the single decode at
+  /// key-up. So a probe that mishears costs nothing but a late hub release.
+  private static let voiceTypingArmProbeSeconds: [Double] = [2.5, 6]
+
+  /// Decides whether this hold is a dictation, early enough to matter.
+  ///
+  /// This is the one thing that still has to happen while the key is down, and
+  /// it exists for cost rather than for correctness. A dictation asks no model
+  /// anything, so streaming a two-minute hold to a realtime voice model whose
+  /// answer will be thrown away is spend for nothing — and it makes that
+  /// socket's lifetime the dictation's, which is how a long hold used to die
+  /// mid-sentence. Recognising the wake word early releases the hub turn and
+  /// leaves the rest of the hold to the microphone alone.
+  ///
+  /// Nothing here is authoritative. The turn is re-checked at key-up against
+  /// the full transcript, which is the decision that actually routes it.
+  private func probeForDictationRouting(turnID: VoiceTurnID) {
+    guard !voiceTypingArmed, !voiceTypingArmProbeInFlight,
+      voiceTypingArmProbesSpent < Self.voiceTypingArmProbeSeconds.count
+    else { return }
+    let threshold = Int(Self.voiceTypingArmProbeSeconds[voiceTypingArmProbesSpent] * 16_000) * 2
+    guard voiceTypingUtterance.audio.count >= threshold,
+      let audio = voiceTypingUtterance.decodableAudio()
+    else { return }
+    voiceTypingArmProbesSpent += 1
+    voiceTypingArmProbeInFlight = true
+    let keywords = currentContextSnapshot?.keywords ?? []
     Task { @MainActor [weak self] in
-      let started = Date()
-      let tail = await PTTLanguageIdentifier.shared.transcribe(pcm16k: audio)
+      let decoded = await PTTLanguageIdentifier.shared.transcribe(pcm16k: audio)
       guard let self else { return }
-      self.voiceTypingProbeInFlight = false
-      guard self.voiceTypingWindow.consumedBytes == consumedAtProbe else {
-        log("PushToTalkManager: voice-typing probe superseded by a stream commit — dropped")
-        return
-      }
-      let text = tail.map { self.voiceTypingWindow.transcript(tail: $0) }
-      if let tail {
-        // Once this stretch has been typed, commit it: its text stops being
-        // revised and its audio is dropped, so the next probe decodes only what
-        // has been said since. Prefers a pause so no word is cut in half.
-        // Stability is what makes a commit safe: the recognizer has stopped
-        // revising this window, so freezing it cannot freeze a half-heard word.
-        //
-        // With the backend stream healthy the pause has to last longer before
-        // the local decode freezes it. The stream speaks at exactly these
-        // pauses, a beat behind; giving it that beat is what lets the stronger
-        // model own the committed text, and the local commit still catches a
-        // stream that has gone quiet.
-        let stable = tail == self.voiceTypingLastProbeTail
-        self.voiceTypingLastProbeTail = tail
-        let quietSeconds =
-          self.voiceTypingCloudIsHealthy
-          ? Self.voiceTypingLocalCommitPauseWhileStreaming
-          : Self.voiceTypingLocalCommitPause
-        let committed = self.voiceTypingWindow.commitIfReady(
-          tail: tail,
-          endsQuiet: VoiceTypeAudioTrim.endsQuiet(audio, seconds: quietSeconds),
-          tailIsStable: stable)
-        if committed {
-          self.voiceTypingLastProbeTail = ""
-          log(
-            "PushToTalkManager: voice-typing committed "
-              + "\(String(format: "%.1f", Double(audio.count / 2) / 16_000))s locally — dropping its audio")
-        }
-      }
-      // The text, not just its length: a probe that loses the wake word is
-      // indistinguishable from one that heard it when all you have is a count,
-      // and that is exactly the failure that routes a dictation to the model.
-      log(
-        "PushToTalkManager: voice-typing probe \(String(format: "%.2f", Double(audio.count / 2) / 16_000))s "
-          + "→ \(text.map { "\"\($0.prefix(48))\"" } ?? "nil") in \(Int(Date().timeIntervalSince(started) * 1000))ms")
+      self.voiceTypingArmProbeInFlight = false
       guard self.voiceTurnCoordinator.activeTurnID == turnID,
         self.phase?.isRecording == true,
-        text != nil
+        let decoded
       else { return }
-      // The decode of the window as it was when the probe started. If the
-      // window committed locally in the meantime the tail is now committed
-      // text, and the moving edge is empty until the next probe.
-      self.voiceTypingLocalTail =
-        self.voiceTypingWindow.pendingAudio.isEmpty ? "" : (tail ?? "")
-      let claimedBefore = self.voiceTypeSession.claimsTurn
-      self.pushVoiceTypingTranscript()
-      // The local model is what recognises the wake word; the moment it has,
-      // the turn becomes a dictation: the hub is released and the stronger
-      // streaming model is brought up to own the finished stretches.
-      if self.voiceTypeSession.claimsTurn {
-        if !claimedBefore { self.voiceTypingDidArm(turnID: turnID) }
-        self.startVoiceTypingUpgradeStreamIfNeeded(turnID: turnID)
+      guard case .typing = VoiceTypeCommandParser.decide(self.keywordCorrected(decoded, keywords: keywords))
+      else {
+        log("PushToTalkManager: wake-word check heard \"\(decoded.prefix(48))\" — not a dictation")
+        return
       }
+      self.voiceTypingArmed = true
+      self.voiceTypingDidArm(turnID: turnID)
     }
   }
 
-  /// How long the speaker has to be quiet before the local decode freezes a
-  /// window on its own.
-  nonisolated static let voiceTypingLocalCommitPause: Double = 0.35
-  /// The same, while the backend stream is healthy and expected to commit the
-  /// pause itself first.
-  nonisolated static let voiceTypingLocalCommitPauseWhileStreaming: Double = 1.5
-
-  /// The turn has just become a dictation. Whatever model the reducer routed
-  /// it to at key-down is released now, not at key-up: a hold can run for
-  /// minutes, and streaming those minutes to a realtime model whose answer
-  /// will be cancelled is spend for nothing — and its socket's lifetime would
-  /// become the dictation's.
+  /// The turn is a dictation. Whatever model the reducer routed it to at
+  /// key-down is released now rather than at key-up.
   private func voiceTypingDidArm(turnID: VoiceTurnID) {
-    guard !voiceTypingReleasedHubTurn, isHubMode || isWaitingForHub else { return }
-    voiceTypingReleasedHubTurn = true
+    guard isHubMode || isWaitingForHub else { return }
     log("PushToTalkManager: dictation armed — releasing the realtime hub turn")
     _ = RealtimeHubController.shared.cancelTurn(turnID: turnID)
+  }
+
+  /// The recognizers a dictation is resolved from, wired to the real services.
+  ///
+  /// `language` is read here, on the main actor, rather than inside the request
+  /// closure: the settings store is main-actor isolated and the closure runs off
+  /// it.
+  private func makeVoiceTypingTranscriber() -> VoiceTypeTranscriber {
+    let language = AssistantSettings.shared.effectiveTranscriptionLanguage
+    return VoiceTypeTranscriber(
+      cloud: { audio, keywords in
+        try await TranscriptionService.batchTranscribe(
+          audioData: audio, language: language, contextKeywords: keywords
+        ).transcript
+      },
+      onDevice: { audio in await PTTLanguageIdentifier.shared.transcribe(pcm16k: audio) },
+      isReachable: { await MainActor.run { NetworkReachability.shared.isOnline } })
+  }
+
+  /// The whole paste-on-release pipeline, from a complete hold to text on
+  /// screen: one transcription of the entire utterance, one wake-word decision,
+  /// one formatting pass, one paste.
+  ///
+  /// `audio` is captured by the caller *synchronously*, before the turn's
+  /// terminal cleanup runs. That is deliberate and it is what retired the
+  /// previous design's worst piece of machinery: while text was typed as the
+  /// user spoke, the closing flush had to outlive the reducer's terminal, so
+  /// cleanup had to be taught to leave the decode window and the streaming
+  /// socket alone while a flush was open (resetting them there lost the last
+  /// word of every hold), and a generation token had to prove the flush still
+  /// belonged to the turn that opened it. Holding the bytes instead means
+  /// nothing shared survives the await.
+  private func resolveDictation(
+    audio: Data, keywords: [String], generation: Int
+  ) async -> VoiceTypeSession.Completion {
+    guard voiceTypeSession.canDeliver() else {
+      log("PushToTalkManager: Accessibility not granted — a dictation cannot be delivered")
+      return .none
+    }
+    let started = Date()
+    let outcome = await makeVoiceTypingTranscriber().transcribe(audio, keywords: keywords)
+    voiceTypingLastSource = outcome.transcript?.source
+    voiceTypingLastDegradation = outcome.degradation
+    if let degradation = outcome.degradation {
+      DesktopDiagnosticsManager.shared.recordFallback(
+        area: "voice_typing",
+        from: "backend_batch_stt",
+        to: "on_device_asr",
+        reason: degradation == .network ? "network" : (degradation == .timeout ? "timeout" : "other"),
+        outcome: outcome.transcript == nil ? .exhausted : .degraded)
+    }
+    guard let transcript = outcome.transcript else {
+      log(
+        "PushToTalkManager: dictation decode returned nothing after "
+          + "\(Int(Date().timeIntervalSince(started) * 1000))ms")
+      return .none
+    }
+    log(
+      "PushToTalkManager: dictation decoded by \(transcript.source.rawValue) in "
+        + "\(Int(Date().timeIntervalSince(started) * 1000))ms — \"\(transcript.text.prefix(48))\"")
+    return deliverDictation(fromTranscript: transcript.text, keywords: keywords, generation: generation)
+  }
+
+  /// Parse, format, paste. The tail every route shares once it holds a complete
+  /// transcript, whichever recognizer produced it — the batch decode above, or
+  /// an STT route's own final transcript.
+  private func deliverDictation(
+    fromTranscript transcript: String, keywords: [String], generation: Int
+  ) -> VoiceTypeSession.Completion {
+    guard generation == voiceTypingTurnGeneration else {
+      log("PushToTalkManager: dictation resolved after a new turn began — discarded")
+      return .none
+    }
+    let corrected = keywordCorrected(transcript, keywords: keywords)
+    guard case .typing(let payload) = VoiceTypeCommandParser.decide(corrected) else { return .none }
+    let text = VoiceTypeFormatter.format(payload)
+    guard !text.isEmpty else { return .none }
+    return voiceTypeSession.deliver(payload: text)
+  }
+
+  /// The hold's audio, taken before the turn's terminal cleanup can reset it.
+  ///
+  /// Every caller of `resolveDictation` goes through here, because "read the
+  /// bytes synchronously" is the property the whole teardown story rests on —
+  /// and because the truncation warning has to be read here too. Asked after
+  /// the await it would always say no: cleanup has cleared the buffer by then.
+  private func captureVoiceTypingAudio() -> Data? {
+    guard let audio = voiceTypingUtterance.decodableAudio() else { return nil }
+    if voiceTypingUtterance.didTruncate {
+      log("PushToTalkManager: dictation hit the turn audio cap — the tail of the hold was not heard")
+    }
+    return audio
   }
 
   /// Decides from the whole turn whether this was a dictation, and only then
   /// lets the realtime model have it.
   ///
-  /// The live probes read a partial, silence-trimmed buffer. When they lose the
-  /// wake word — "type" opens on a quiet /t/ burst that the trim's 100 ms
-  /// pre-roll does not always preserve — the turn used to be committed as an
-  /// ordinary question, and the model, hearing "type …", spawned an agent to do
-  /// the typing itself. That is the worst possible outcome: not a missed
-  /// dictation but an unrequested action.
+  /// One decode of the complete utterance, which is both the accurate way to
+  /// ask the question and the only way to ask it once. The live probes this
+  /// replaced read a partial, silence-trimmed buffer, and when they lost the
+  /// wake word — "type" opens on a quiet /t/ burst the trim's pre-roll does not
+  /// always preserve — the turn was committed as an ordinary question and the
+  /// model, hearing "type …", spawned an agent to do the typing.
   ///
-  /// Costs one on-device decode (~100–200 ms) before the model answers a
-  /// question. That is the price of never mistaking a dictation for an
-  /// instruction, and it is paid at key-up, not while the user is speaking.
+  /// Costs one transcription before the model answers a question. That is the
+  /// price of never mistaking a dictation for an instruction, and it is paid at
+  /// key-up rather than while the user is speaking.
   private func gateHubCommitOnFinalDictationCheck(
     turnID: VoiceTurnID, turnAudio: Data, totalSec: Double
   ) {
-    // The uncommitted window, not the whole turn: on a long hold, decoding
-    // every minute of it here would stall the model's answer by seconds. What
-    // is already committed is already text.
-    let trimmed = voiceTypingWindowTailForFlush()
-    guard !trimmed.isEmpty else {
+    guard let audio = captureVoiceTypingAudio() else {
       commitHubTurn(turnID: turnID, turnAudio: turnAudio, totalSec: totalSec)
       return
     }
+    let keywords = currentContextSnapshot?.keywords ?? []
+    let generation = voiceTypingTurnGeneration
     Task { @MainActor [weak self] in
-      let decoded = await PTTLanguageIdentifier.shared.transcribe(pcm16k: trimmed)
-      guard let self, self.voiceTurnCoordinator.activeTurnID == turnID else { return }
-      if let decoded {
-        let text = self.correctedForTyping(self.voiceTypingWindow.transcript(tail: decoded))
-        if case .typed(let typed) = self.voiceTypeSession.finish(transcript: text) {
-          log(
-            "PushToTalkManager: final decode caught a dictation the probes missed "
-              + "(\(typed.count) chars) — not committing")
-          _ = RealtimeHubController.shared.cancelTurn(turnID: turnID)
-          AnalyticsManager.shared.floatingBarPTTEnded(
-            mode: self.finalizedMode, committed: true, transcriptLength: typed.count)
-          self.recordVoiceTypingExchange(utterance: text, typed: typed, turnID: turnID)
-          self.voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
-          return
-        }
+      guard let self else { return }
+      let completion = await self.resolveDictation(
+        audio: audio, keywords: keywords, generation: generation)
+      guard self.voiceTurnCoordinator.activeTurnID == turnID else { return }
+      guard case .typed(let typed) = completion else {
+        self.commitHubTurn(turnID: turnID, turnAudio: turnAudio, totalSec: totalSec)
+        return
       }
-      self.commitHubTurn(turnID: turnID, turnAudio: turnAudio, totalSec: totalSec)
+      log("PushToTalkManager: key-up decode caught a dictation (\(typed.count) chars) — not committing")
+      _ = RealtimeHubController.shared.cancelTurn(turnID: turnID)
+      AnalyticsManager.shared.floatingBarPTTEnded(
+        mode: self.finalizedMode, committed: true, transcriptLength: typed.count)
+      self.recordVoiceTypingExchange(typed: typed, turnID: turnID)
+      self.voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
     }
   }
 
@@ -3402,288 +3349,58 @@ class PushToTalkManager: ObservableObject {
         + "\(commitResult == .accepted ? "committed" : "deferred until its realtime session is ready")")
   }
 
-  /// Opens the backend streaming recognizer for a dictation already in progress.
+  /// Closes a dictation the wake-word check already recognised.
   ///
-  /// Deliberately not opened at key-down. Until the local model has heard
-  /// "type" this turn is probably an ordinary question, which the hub answers
-  /// and which would gain nothing from a second recognizer — opening one on
-  /// every turn would double STT spend for the turns that never dictate.
-  ///
-  /// The stream's job is the *finished* stretches, not the moving edge. The
-  /// surface behind it (`/v2/voice-message/transcribe-stream`, `velma-2`
-  /// first) forwards only completed utterances, one per message, each at the
-  /// pause that ended it. Each is committed into the window by its position in
-  /// the turn (`adoptStreamFinal`), replacing the on-device decode of that same
-  /// audio; the on-device probes keep typing whatever has been said since. So
-  /// the text appears at the speed of the local model and settles to the
-  /// accuracy of the streaming one, and neither recognizer's cadence bounds
-  /// how long the hold can run.
-  ///
-  /// Audio is sent live only while the socket is open. It is handed the whole
-  /// pending window on (re)connect and stream time zero is anchored to the
-  /// window's consumed edge at that moment, so utterance positions stay
-  /// meaningful across a reconnect. Failure is not a problem: the local decode
-  /// never stopped, so a stream that dies leaves dictation exactly as good as
-  /// it was before.
-  private func startVoiceTypingUpgradeStreamIfNeeded(turnID: VoiceTurnID) {
-    guard voiceTypingCloudService == nil, !voiceTypingCloudFailed else { return }
-    guard NetworkReachability.shared.isOnline else { return }
-    // The on-screen keywords go in as vocabulary context, which is the part the
-    // local model cannot do — biasing the decode toward names and jargon that
-    // are visible rather than correcting spelling after the fact.
+  /// The turn ends immediately — the user has let go, and nothing about the
+  /// paste needs the reducer to stay open for it. `.success` is not available
+  /// from `.finalizing` (it requires the provider / tool / journal completion
+  /// fences, and a dictation deliberately never reaches a provider), so the turn
+  /// terminates the way an intentional Stop does rather than as an error.
+  private func finishVoiceTypingTurn(turnID: VoiceTurnID) {
+    // Read before the terminal below tears the pipeline down.
+    let audio = captureVoiceTypingAudio()
     let keywords = currentContextSnapshot?.keywords ?? []
-    guard
-      let service = try? TranscriptionService(
-        language: AssistantSettings.shared.effectiveTranscriptionLanguage,
-        mode: .ptt,
-        contextKeywords: keywords)
-    else {
-      log("PushToTalkManager: dictation upgrade stream unavailable — staying on-device")
-      voiceTypingCloudFailed = true
+    let generation = voiceTypingTurnGeneration
+    log(
+      "PushToTalkManager: dictation closing — \(String(format: "%.1f", voiceTypingUtterance.seconds))s held")
+    voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
+    guard let audio else {
+      log("PushToTalkManager: dictation held no speech — nothing to paste")
+      AnalyticsManager.shared.floatingBarPTTEnded(
+        mode: finalizedMode, committed: false, transcriptLength: nil)
       return
     }
-    voiceTypingCloudService = service
-    log(
-      "PushToTalkManager: upgrading dictation to the backend streaming recognizer "
-        + "(\(keywords.count) context keywords)")
-    service.start(
-      onSegments: { [weak self] segments in
-        Task { @MainActor [weak self] in
-          guard let self, self.voiceTypingCloudService === service else { return }
-          self.adoptVoiceTypingStreamSegments(segments, turnID: turnID)
-        }
-      },
-      onEvent: { _ in },
-      onError: { [weak self] error in
-        Task { @MainActor [weak self] in
-          guard let self, self.voiceTypingCloudService === service else { return }
-          logError("PushToTalkManager: dictation upgrade stream failed", error: error)
-          // Real evidence, so the pipeline stops giving the stream first claim
-          // on each pause. Everything it committed is already in the window;
-          // everything it did not is still pending audio the local decode has
-          // been typing all along, so nothing is lost and nothing is retyped.
-          self.voiceTypingCloudFailed = true
-          self.voiceTypingCloudConnected = false
-          self.voiceTypingCloudService = nil
-          DesktopDiagnosticsManager.shared.recordFallback(
-            area: "voice_typing",
-            from: "backend_streaming_stt",
-            to: "on_device_asr",
-            reason: "other",
-            outcome: .degraded)
-        }
-      },
-      onConnected: { [weak self] in
-        Task { @MainActor [weak self] in
-          guard let self, self.voiceTypingCloudService === service else { return }
-          // Everything not yet committed, from the consumed edge: on a first
-          // connect that is the turn from key-down, so the stream hears the
-          // wake word too. Sent from here rather than at open so that it and
-          // the live chunks that follow are one contiguous timeline — the
-          // chunk handler sends live only once this flag is set, and both run
-          // on the main actor, so no chunk is sent twice or skipped.
-          self.voiceTypingCloudOriginBytes = self.voiceTypingWindow.consumedBytes
-          let pending = self.voiceTypingWindow.pendingAudio
-          if !pending.isEmpty { service.sendAudio(pending) }
-          self.voiceTypingCloudConnected = true
-          log(
-            "PushToTalkManager: dictation stream connected — replayed "
-              + "\(String(format: "%.1f", Double(pending.count / 2) / 16_000))s of pending audio")
-        }
-      },
-      onDisconnected: { [weak self] in
-        Task { @MainActor [weak self] in
-          guard let self, self.voiceTypingCloudService === service else { return }
-          self.voiceTypingCloudConnected = false
-        }
-      })
-  }
-
-  /// Folds the stream's finished utterances into the window by position.
-  ///
-  /// The stream is the stronger recognizer, but the commit is refused when
-  /// what it heard would take the turn away from typing — a first utterance
-  /// that lost the wake word ("tie the report is due") would otherwise freeze
-  /// a prefix the parser rejects, and nothing could ever be typed again.
-  ///
-  /// An utterance that follows speech nothing has committed (a speaker who
-  /// never pauses long enough for a local commit, after a forced 20 s cut) is
-  /// not refused outright: the gap is decoded on-device first and both texts
-  /// are committed together, so the stream's text still lands for the stretch
-  /// it finished. The window is re-checked after the decode; if anything
-  /// committed meanwhile, the utterance is dropped and the local decode keeps
-  /// the stretch — text is never lost, only its source changes.
-  private func adoptVoiceTypingStreamSegments(
-    _ segments: [TranscriptionService.BackendSegment], turnID: VoiceTurnID
-  ) {
     Task { @MainActor [weak self] in
       guard let self else { return }
-      for segment in segments {
-        await self.adoptVoiceTypingStreamSegment(segment, turnID: turnID)
-      }
-    }
-  }
-
-  private func voiceTypingStreamIsCurrent(turnID: VoiceTurnID) -> Bool {
-    voiceTurnCoordinator.activeTurnID == turnID || voiceTypeSession.isFlushing(token: voiceTypingFlushToken)
-  }
-
-  private func adoptVoiceTypingStreamSegment(
-    _ segment: TranscriptionService.BackendSegment, turnID: VoiceTurnID
-  ) async {
-    guard voiceTypingStreamIsCurrent(turnID: turnID) else { return }
-    let bytesPerSecond = 16_000.0 * 2
-    let streamKeywords =
-      voiceTurnCoordinator.activeTurnID == turnID
-      ? (currentContextSnapshot?.keywords ?? []) : voiceTypingFlushKeywords
-    let span = String(format: "%.1f–%.1f", segment.start, segment.end)
-    var text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return }
-    var startByte = voiceTypingCloudOriginBytes + Int(segment.start * bytesPerSecond)
-    let endByte = voiceTypingCloudOriginBytes + Int(segment.end * bytesPerSecond)
-    if let gapAudio = voiceTypingWindow.uncommittedSpeech(before: startByte) {
-      let consumedBefore = voiceTypingWindow.consumedBytes
-      let gapText = await PTTLanguageIdentifier.shared.transcribe(pcm16k: gapAudio)
-      guard voiceTypingStreamIsCurrent(turnID: turnID),
-        voiceTypingWindow.consumedBytes == consumedBefore
-      else {
-        log("PushToTalkManager: dictation stream utterance \(span)s overtaken while its gap was decoded — dropped")
+      let completion = await self.resolveDictation(
+        audio: audio, keywords: keywords, generation: generation)
+      guard case .typed(let typed) = completion else {
+        // The hub turn was released when the wake-word check armed, so there is
+        // no model left to answer this. Rare by construction: it takes the
+        // opening decode hearing a wake word that the full-utterance decode
+        // then does not.
+        log("PushToTalkManager: armed dictation did not resolve to text — turn ends with nothing")
+        DesktopDiagnosticsManager.shared.recordFallback(
+          area: "voice_typing",
+          from: "keystroke_injection",
+          to: "discarded",
+          reason: "other",
+          outcome: .exhausted)
+        AnalyticsManager.shared.floatingBarPTTEnded(
+          mode: self.finalizedMode, committed: false, transcriptLength: nil)
         return
       }
-      guard let gapText, !gapText.isEmpty else {
-        log(
-          "PushToTalkManager: dictation stream utterance \(span)s follows speech that did not decode — keeping the local decode"
-        )
-        return
-      }
-      text = gapText + " " + text
-      startByte = consumedBefore
-      log(
-        "PushToTalkManager: dictation stream utterance \(span)s adopted with \(gapText.count) chars decoded locally before it"
-      )
-    }
-    let candidate = correctedForTyping(voiceTypingWindow.transcript(tail: text), keywords: streamKeywords)
-    guard VoiceTypeCommandParser.stillDictates(candidate) else {
-      log(
-        "PushToTalkManager: dictation stream utterance did not parse as a dictation — "
-          + "keeping the local decode for \(span)s")
-      return
-    }
-    switch voiceTypingWindow.adoptStreamFinal(text: text, startByte: startByte, endByte: endByte) {
-    case .adopted:
-      voiceTypingCloudFinalsAdopted += 1
-      log("PushToTalkManager: dictation stream committed \(span)s (\(text.count) chars)")
-    case .alreadyCommitted:
-      log("PushToTalkManager: dictation stream utterance \(span)s arrived after a local commit — dropped")
-      return
-    case .uncommittedSpeechBefore:
-      log(
-        "PushToTalkManager: dictation stream utterance \(span)s follows speech nothing committed — keeping the local decode"
-      )
-      return
-    case .ignored:
-      return
-    }
-    // The window moved under the moving edge: whatever the last probe decoded
-    // is now either committed text or gone. Nothing is typed from here — that
-    // used to push the committed prefix alone, which deleted the whole moving
-    // edge from the screen and retyped it a probe later (the "double up" the
-    // user saw). Instead the next probe, which decodes the new window, pushes
-    // committed + tail as a *settled* transcript: the stream's corrections
-    // land inside the committed stretch, however far back, and the edge stays.
-    voiceTypingLocalTail = ""
-    voiceTypingLastProbeTail = ""
-    voiceTypingSettleOnNextPush = true
-    if voiceTurnCoordinator.activeTurn?.phase.isRecording != true {
-      // No probe is coming (the turn is flushing): settle now.
-      voiceTypingSettleOnNextPush = false
-      voiceTypeSession.update(
-        transcript: correctedForTyping(voiceTypingWindow.transcript(tail: ""), keywords: streamKeywords),
-        isSettled: true)
+      AnalyticsManager.shared.floatingBarPTTEnded(
+        mode: self.finalizedMode, committed: true, transcriptLength: typed.count)
+      self.recordVoiceTypingExchange(typed: typed, turnID: turnID)
     }
   }
 
-  /// Set by a stream commit; the next probe's push is fed as settled text so
-  /// the stream's corrections reach the screen together with the new edge.
-  private var voiceTypingSettleOnNextPush = false
-
-  /// The flush window token of the dictation currently closing, so a late
-  /// stream utterance can still be adopted after the reducer has moved on.
-  private var voiceTypingFlushToken = -1
-  /// Keywords the turn was corrected against, pinned for its flush.
-  private var voiceTypingFlushKeywords: [String] = []
-
-  /// How long key-up waits for the stream to commit the last utterance before
-  /// the on-device decode closes the turn on its own.
-  nonisolated static let voiceTypingStreamFlushGrace: TimeInterval = 0.6
-
-  /// Closes a dictation on any route: the key came up, whatever the last
-  /// probe had not yet typed is completed from one closing decode, and the
-  /// turn ends without ever having asked a model anything.
-  ///
-  /// The hub turn was released when the dictation armed (or is released here
-  /// if the arming happened without one). `.success` is not available from
-  /// `.finalizing` — it requires the provider / tool / journal completion
-  /// fences, and a dictation deliberately never reaches a provider — so the
-  /// turn terminates the way an intentional Stop does, never as an error.
-  private func finishVoiceTypingTurn(turnID: VoiceTurnID) {
-    let typedCount = voiceTypeSession.typedCount
-    log("PushToTalkManager: voice typing consumed turn (\(typedCount) chars) — not committing")
-    let flushToken = voiceTypeSession.beginFlush()
-    voiceTypingFlushToken = flushToken
-    let keywords = currentContextSnapshot?.keywords ?? []
-    voiceTypingFlushKeywords = keywords
-    if isHubMode || isWaitingForHub {
-      voiceTypingDidArm(turnID: turnID)
-    }
-    AnalyticsManager.shared.floatingBarPTTEnded(
-      mode: finalizedMode, committed: true, transcriptLength: typedCount)
-    voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
-    // The turn is already closed; this only completes the sentence, since the
-    // recognizer stopped a beat before the user did.
-    let stream = voiceTypingCloudIsHealthy ? voiceTypingCloudService : nil
-    if let stream {
-      // The stream holds the last utterance mid-flight. Ask it to finish and
-      // give it a bounded moment: its commit lands through the ordinary
-      // segment path and empties the window, and the closing decode below
-      // then has nothing left to do. A silent stream cannot hang the flush.
-      log("PushToTalkManager: finalizing dictation on the backend stream")
-      stream.finishStream()
-    }
-    Task { @MainActor [weak self] in
-      if stream != nil {
-        let deadline = Date().addingTimeInterval(Self.voiceTypingStreamFlushGrace)
-        while Date() < deadline {
-          guard let self, self.voiceTypeSession.isFlushing(token: flushToken) else { return }
-          if self.voiceTypingWindowTailForFlush().isEmpty { break }
-          try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-      }
-      guard let self, self.voiceTypeSession.isFlushing(token: flushToken) else { return }
-      let remaining = self.voiceTypingWindowTailForFlush()
-      // The same floor as a gap decode: a breath after the last word is not a
-      // word, and decoding it invents one.
-      let decoded =
-        VoiceTypeAudioTrim.speechBytes(in: remaining) < VoiceTypeDecodeWindow.minimumDecodableSpeechBytes
-        ? nil : await PTTLanguageIdentifier.shared.transcribe(pcm16k: remaining)
-      guard self.voiceTypeSession.isFlushing(token: flushToken) else { return }
-      // The whole utterance, not just this window's decode: the planner diffs
-      // against what is on screen, so handing it only the tail would delete
-      // every committed word.
-      let text = self.correctedForTyping(
-        self.voiceTypingWindow.transcript(tail: decoded ?? ""), keywords: keywords)
-      let completion = self.voiceTypeSession.endFlush(token: flushToken, finalTranscript: text)
-      log(
-        "PushToTalkManager: dictation flushed — \(decoded == nil ? "nothing pending" : "\(decoded?.count ?? 0) chars decoded")"
-          + ", \(self.voiceTypingCloudFinalsAdopted) stream finals, "
-          + "\(String(format: "%.1f", Double(self.voiceTypingWindow.consumedBytes / 2) / 16_000))s committed")
-      self.voiceTypingCloudService?.stop(discardBufferedAudio: true)
-      self.voiceTypingCloudService = nil
-      self.voiceTypingCloudConnected = false
-      if case .typed(let typed) = completion {
-        self.recordVoiceTypingExchange(utterance: text, typed: typed, turnID: turnID)
-      }
-    }
+  private func resetVoiceTypingPipeline() {
+    voiceTypingUtterance.reset()
+    voiceTypingArmed = false
+    voiceTypingArmProbeInFlight = false
+    voiceTypingArmProbesSpent = 0
   }
 
   /// Puts a dictated turn in the chat transcript as `Typed: <text>`.
@@ -3693,11 +3410,9 @@ class PushToTalkManager: ObservableObject {
   /// back to what was just written. This goes through the ordinary journal
   /// exchange the realtime voice surface already uses, so the record persists
   /// and enters conversation context exactly like every other voice turn. The
-  /// continuity key is derived from the turn, so a retried flush cannot write a
-  /// second copy.
-  private func recordVoiceTypingExchange(
-    utterance: String, typed: String, turnID: VoiceTurnID
-  ) {
+  /// continuity key is derived from the turn, so a retry cannot write a second
+  /// copy.
+  private func recordVoiceTypingExchange(typed: String, turnID: VoiceTurnID) {
     let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     let manager = FloatingControlBarManager.shared
@@ -3708,7 +3423,7 @@ class PushToTalkManager: ObservableObject {
       // The "Typed:" prefix is what distinguishes it in the transcript.
       let recorded = await manager.recordExchange(
         surface: manager.realtimeVoiceSurfaceReference(),
-        userText: utterance,
+        userText: "Type: \(trimmed)",
         assistantText: "Typed: \(trimmed)",
         origin: "realtime_voice",
         continuityKey: "voice-typing-\(turnID)")
@@ -3727,7 +3442,6 @@ class PushToTalkManager: ObservableObject {
       transcriptSegments.append(segment.text)
     }
     lastInterimText = ""
-    feedVoiceTyping()
 
     // In finalizing state, segments mean backend is done — send immediately
     if phase == .finalizing {
@@ -3893,7 +3607,6 @@ extension PushToTalkManager {
         }
       }
       lastInterimText = ""
-      feedVoiceTyping()
       if phase == .finalizing {
         guard claimOmniCompletion(identity) else { return }
         sendTranscript(turnID: turnID)
@@ -3901,7 +3614,6 @@ extension PushToTalkManager {
     } else {
       lastInterimText += text
       voiceTurnCoordinator.publish(.transcriptChanged(turnID: turnID, text: lastInterimText))
-      feedVoiceTyping()
     }
   }
 

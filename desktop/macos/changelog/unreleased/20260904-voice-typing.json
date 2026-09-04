@@ -1,5 +1,3 @@
 {
-  "changes": [
-    "Say \"type\" during push-to-talk to dictate into whatever app you are in. Text appears as you speak and keeps going for as long as you hold the key, with the streaming recognizer polishing each finished sentence."
-  ]
+  "change": "Voice typing is far more accurate: instead of typing as you speak, the whole dictation is now transcribed once and pasted the moment you let go of the key"
 }

@@ -1,990 +1,427 @@
 import XCTest
 
-@testable import Omi_Computer
+// Guards for the paste-on-release dictation pipeline. Everything here is pure
+// value logic driven through its production API — no live recognizer, no
+// pasteboard, and no wall-clock waits (the transcriber's budget is exercised
+// through an injected sleeper).
+
+// MARK: - Wake word
 
 final class VoiceTypeCommandParserTests: XCTestCase {
 
-  func testWakeWordFollowedByTextDictatesTheRemainder() {
-    XCTAssertEqual(
-      VoiceTypeCommandParser.decide("Type hello world"),
-      .typing(payload: "Hello world"))
-    XCTAssertEqual(
-      VoiceTypeCommandParser.decide("type, hello world"),
-      .typing(payload: "Hello world"))
-    XCTAssertEqual(
-      VoiceTypeCommandParser.decide("Type: meeting notes for Q3."),
-      .typing(payload: "Meeting notes for Q3."))
+  private func payload(_ transcript: String) -> String? {
+    guard case .typing(let payload) = VoiceTypeCommandParser.decide(transcript) else { return nil }
+    return payload
   }
 
-  func testDictatedTextOpensWithACapital() {
-    // Dictation starts a sentence; the recognizer hears the first word mid-utterance
-    // and lowercases it.
-    XCTAssertEqual(VoiceTypeCommandParser.decide("type hello"), .typing(payload: "Hello"))
-    // An already-capitalized word (a name) is left exactly as heard.
-    XCTAssertEqual(VoiceTypeCommandParser.decide("type Nathan is here"), .typing(payload: "Nathan is here"))
+  func testDictatesAfterTheWakeWord() {
+    XCTAssertEqual(payload("type hello world"), "hello world")
   }
 
-  func testGrowingPrefixOfTheWakeWordIsUndecided() {
-    // The first interim fragments of "Type hello" must not be rejected as chat,
-    // or the turn is routed before the user has finished the first word.
-    for fragment in ["T", "Ty", "typ", "type", "type o", "Type th"] {
-      XCTAssertEqual(
-        VoiceTypeCommandParser.decide(fragment), .undecided,
-        "\(fragment) should still be undecided")
+  func testWakeWordIsCaseInsensitive() {
+    XCTAssertEqual(payload("Type hello world"), "hello world")
+    XCTAssertEqual(payload("TYPE hello world"), "hello world")
+  }
+
+  func testPunctuationAfterTheWakeWordIsNotDictated() {
+    XCTAssertEqual(payload("Type, hello world"), "hello world")
+    XCTAssertEqual(payload("Type: hello world"), "hello world")
+    XCTAssertEqual(payload("Type — hello world"), "hello world")
+  }
+
+  /// Longest-first, or "type out hello" dictates "out hello".
+  func testLongerWakeWordsWinOverShorterOnes() {
+    XCTAssertEqual(payload("type out hello world"), "hello world")
+    XCTAssertEqual(payload("type this hello world"), "hello world")
+  }
+
+  func testWakeWordAsAWordPrefixIsNotACommand() {
+    XCTAssertNil(payload("typescript generics, explain them"))
+    XCTAssertNil(payload("typing is hard"))
+    XCTAssertNil(payload("typed it already"))
+  }
+
+  /// A bare wake word carries no dictation, and it is the phrase most likely to
+  /// open an ordinary question ("type ... " while the user thinks).
+  func testBareWakeWordIsNotACommand() {
+    XCTAssertNil(payload("type"))
+    XCTAssertNil(payload("Type."))
+    XCTAssertNil(payload("type   "))
+  }
+
+  func testEmptyTranscriptIsNotACommand() {
+    XCTAssertNil(payload(""))
+    XCTAssertNil(payload("   \n "))
+  }
+
+  func testOrdinaryQuestionIsRejected() {
+    XCTAssertNil(payload("what is on my calendar tomorrow"))
+  }
+
+  /// The corrector once rewrote the wake word itself from an on-screen keyword
+  /// ("Type" → "typ"), after which the turn was never recognised as a dictation
+  /// and the realtime model spawned an agent to do the typing.
+  func testCorrectionNeverTouchesTheWakeWord() {
+    let corrected = VoiceTypeCommandParser.correctingPayload("Type, send it to nate") { payload in
+      payload.replacingOccurrences(of: "nate", with: "Nathan")
     }
+    XCTAssertEqual(corrected, "Type, send it to Nathan")
   }
 
-  func testWakeWordAsAPrefixOfALongerWordIsNotACommand() {
-    // The regression this guards: "type" inside an ordinary question hijacking
-    // the turn and dictating the question into the user's editor.
-    XCTAssertEqual(VoiceTypeCommandParser.decide("typescript generics, explain"), .rejected)
-    XCTAssertEqual(VoiceTypeCommandParser.decide("typing indicator is broken"), .rejected)
-    XCTAssertEqual(VoiceTypeCommandParser.decide("what type of bird is this"), .rejected)
-  }
-
-  func testLongerWakeWordWinsOverItsOwnPrefix() {
-    XCTAssertEqual(
-      VoiceTypeCommandParser.decide("type out the address"),
-      .typing(payload: "The address"))
-    XCTAssertEqual(
-      VoiceTypeCommandParser.decide("type this: buy milk"),
-      .typing(payload: "Buy milk"))
+  func testCorrectionLeavesANonDictationUntouched() {
+    let corrected = VoiceTypeCommandParser.correctingPayload("typescript generics") { _ in "rewritten" }
+    XCTAssertEqual(corrected, "typescript generics")
   }
 }
 
-final class VoiceTypeWakeWordCorrectionTests: XCTestCase {
+// MARK: - Formatting
 
-  func testTheWakeWordIsNeverHandedToTheCorrector() {
-    // Live: a window title containing "typ" made the keyword corrector rewrite
-    // "Type" itself, so no probe ever parsed as a dictation and the model
-    // spawned an agent to type instead.
-    var seen: [String] = []
-    let out = VoiceTypeCommandParser.correctingPayload("Type, hello world") { payload in
-      seen.append(payload)
-      return payload.replacingOccurrences(of: "Type", with: "typ").replacingOccurrences(of: "world", with: "World")
-    }
-    XCTAssertEqual(seen, ["hello world"])
-    XCTAssertEqual(out, "Type, hello World")
-    XCTAssertTrue(VoiceTypeCommandParser.stillDictates(out))
+final class VoiceTypeFormatterTests: XCTestCase {
+
+  func testDropsStandaloneFillers() {
+    XCTAssertEqual(VoiceTypeFormatter.format("so um the report is late"), "So the report is late")
+    XCTAssertEqual(VoiceTypeFormatter.format("uh hello there"), "Hello there")
   }
 
-  func testAWakeWordCorrectorCannotDisarmTheTurn() {
-    let hostile: (String) -> String = { $0.replacingOccurrences(of: "Type", with: "typ") }
-    for transcript in ["Type hello", "Type. Hello there.", "type out the report", "Type this: send it"] {
-      let out = VoiceTypeCommandParser.correctingPayload(transcript, using: hostile)
-      XCTAssertTrue(VoiceTypeCommandParser.stillDictates(out), "\(transcript) → \(out)")
-    }
+  /// "So, um, the thing" has to lose the whole "um," or the tidy-up leaves a
+  /// doubled comma behind.
+  func testDropsFillersWithTheirAttachedPunctuation() {
+    XCTAssertEqual(VoiceTypeFormatter.format("So, um, the thing"), "So, the thing")
   }
 
-  func testTextThatIsNotYetACommandIsLeftAlone() {
-    let out = VoiceTypeCommandParser.correctingPayload("Ty") { _ in
-      XCTFail("must not correct")
-      return ""
-    }
-    XCTAssertEqual(out, "Ty")
+  func testKeepsWordsThatMerelyStartLikeAFiller() {
+    XCTAssertEqual(VoiceTypeFormatter.format("umbrella season"), "Umbrella season")
+    XCTAssertEqual(VoiceTypeFormatter.format("uhtred of bebbanburg"), "Uhtred of bebbanburg")
+  }
+
+  /// Words that carry meaning in an ordinary sentence stay, even though a
+  /// filler-hunting formatter would be tempted by them.
+  func testKeepsMeaningfulInterjections() {
+    XCTAssertEqual(VoiceTypeFormatter.format("ah I see"), "Ah I see")
+    XCTAssertEqual(VoiceTypeFormatter.format("oh no"), "Oh no")
+  }
+
+  func testPullsPunctuationBackOntoItsWord() {
+    XCTAssertEqual(VoiceTypeFormatter.format("hello , world ."), "Hello, world.")
+    XCTAssertEqual(VoiceTypeFormatter.format("really ? yes !"), "Really? Yes!")
+  }
+
+  func testCollapsesRepeatedSpaces() {
+    XCTAssertEqual(VoiceTypeFormatter.format("hello    world"), "Hello world")
+  }
+
+  func testCapitalizesTheFirstWordAndEachSentence() {
     XCTAssertEqual(
-      VoiceTypeCommandParser.correctingPayload("what is on my calendar") { _ in "changed" },
-      "what is on my calendar")
+      VoiceTypeFormatter.format("the build is green. ship it."), "The build is green. Ship it.")
+  }
+
+  /// Upward only. A recognizer that returned "iPhone" or "API" got it right,
+  /// and normalizing case would undo the accuracy this change is for.
+  func testNeverLowercasesAWord() {
+    XCTAssertEqual(VoiceTypeFormatter.format("the API is down"), "The API is down")
+    XCTAssertEqual(VoiceTypeFormatter.format("my iPhone broke"), "My iPhone broke")
+    XCTAssertEqual(VoiceTypeFormatter.format("ask McDonald about it"), "Ask McDonald about it")
+  }
+
+  /// A period without a following space is an abbreviation or a decimal, not a
+  /// sentence boundary.
+  func testAbbreviationsAndDecimalsDoNotOpenASentence() {
+    XCTAssertEqual(VoiceTypeFormatter.format("use e.g. this one"), "Use e.g. this one")
+    XCTAssertEqual(VoiceTypeFormatter.format("ship i.e. release it"), "Ship i.e. release it")
+    XCTAssertEqual(VoiceTypeFormatter.format("it took 3.5 hours"), "It took 3.5 hours")
+    XCTAssertEqual(VoiceTypeFormatter.format("the U.S. market"), "The U.S. market")
+  }
+
+  /// The first *letter* of "3rd" is in the middle of the word; raising it would
+  /// produce "3Rd".
+  func testAWordOpeningWithADigitIsLeftAlone() {
+    XCTAssertEqual(VoiceTypeFormatter.format("3rd time lucky"), "3rd time lucky")
+  }
+
+  /// Spoken punctuation commands are deliberately not implemented: "the period
+  /// of the wave" is a sentence someone will say, and deleting the word they
+  /// did say is a worse accuracy bug than the one it would fix.
+  func testSpokenPunctuationWordsSurviveVerbatim() {
+    XCTAssertEqual(
+      VoiceTypeFormatter.format("the period of the wave"), "The period of the wave")
+    XCTAssertEqual(VoiceTypeFormatter.format("add a new line here"), "Add a new line here")
+  }
+
+  func testLineStructureSurvives() {
+    XCTAssertEqual(VoiceTypeFormatter.format("first line\nsecond line"), "First line\nSecond line")
+  }
+
+  func testEmptyTranscriptFormatsToNothing() {
+    XCTAssertEqual(VoiceTypeFormatter.format(""), "")
+    XCTAssertEqual(VoiceTypeFormatter.format("   "), "")
+    XCTAssertEqual(VoiceTypeFormatter.format("um uh"), "")
   }
 }
 
-final class VoiceTypeStreamFinalAdmissionTests: XCTestCase {
+// MARK: - Audio
 
-  func testAFinalThatKeepsTheWakeWordMayBecomeThePrefix() {
-    XCTAssertTrue(VoiceTypeCommandParser.stillDictates("Type hello world."))
-    XCTAssertTrue(VoiceTypeCommandParser.stillDictates("Type hello world. And then more."))
+/// s16le 16 kHz mono, the format every recognizer here is fed.
+private func pcm(seconds: Double, amplitude: Int16) -> Data {
+  let samples = Int(seconds * 16_000)
+  var data = Data(capacity: samples * 2)
+  for index in 0..<samples {
+    // Alternating sign so the RMS matches the amplitude rather than a DC offset.
+    let value = index.isMultiple(of: 2) ? amplitude : -amplitude
+    withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
   }
-
-  func testAFirstFinalThatLostTheWakeWordIsRefused() {
-    // Freezing "tie the report is due" as the prefix would leave a transcript
-    // the parser rejects forever, and nothing could be typed again.
-    XCTAssertFalse(VoiceTypeCommandParser.stillDictates("tie the report is due"))
-    XCTAssertFalse(VoiceTypeCommandParser.stillDictates(""))
-  }
+  return data
 }
 
-final class VoiceTypeStreamPlannerTests: XCTestCase {
-
-  func testPureGrowthOnlyInsertsTheNewSuffix() {
-    var planner = VoiceTypeStreamPlanner()
-    XCTAssertEqual(planner.plan(for: "hello"), .init(backspaces: 0, insertion: "hello"))
-    XCTAssertEqual(planner.plan(for: "hello wor"), .init(backspaces: 0, insertion: " wor"))
-    XCTAssertEqual(planner.plan(for: "hello world"), .init(backspaces: 0, insertion: "ld"))
-    XCTAssertEqual(planner.typed, "hello world")
-  }
-
-  func testRevisedTailRewritesOnlyTheDivergentPart() {
-    // ASR revises "wright" to "write". Typing only appended text would leave the
-    // wrong word on screen for good.
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "I wright")
-    // "I wri" survives; only "ght" is deleted.
-    XCTAssertEqual(planner.plan(for: "I write"), .init(backspaces: 3, insertion: "te"))
-    XCTAssertEqual(planner.typed, "I write")
-  }
-
-  func testACorrectionNearTheMovingEdgeIsStillMade() {
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "I will write the notes tonite")
-    // Two words back: worth fixing.
-    let edit = planner.plan(for: "I will write the notes tonight")
-    XCTAssertEqual(edit.backspaces, 2)
-    XCTAssertEqual(planner.typed, "I will write the notes tonight")
-  }
-
-  func testACorrectionTooFarBackIsNotMade() {
-    // Erasing half a sentence to fix a word from ten words ago is violent to
-    // watch and fights the user if they have started editing behind the caret.
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "the quick brown fox jumps over the lazy dog today")
-    let edit = planner.plan(for: "the quick brown cat jumps over the lazy dog today and more")
-    XCTAssertEqual(edit.backspaces, 0, "must not rewind past the last few words")
-    XCTAssertEqual(edit.insertion, " and more", "the tail keeps flowing")
-    XCTAssertEqual(
-      planner.typed, "the quick brown fox jumps over the lazy dog today and more",
-      "the planner tracks what is really on screen, not what it wished were there")
-  }
-
-  func testSettledTextMayCorrectHoweverFarBackItReaches() {
-    // A finished utterance from the streaming model, or the closing decode,
-    // will not move again; leaving the screen out of step with it would make
-    // every later diff run against text that is not there.
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "Hello wrold this is a tset of the thing")
-    let edit = planner.plan(for: "Hello world, this is a test of the thing.", rewritesFreely: true)
-    XCTAssertEqual(edit.backspaces, "rold this is a tset of the thing".count)
-    XCTAssertEqual(edit.insertion, "orld, this is a test of the thing.")
-    XCTAssertEqual(planner.typed, "Hello world, this is a test of the thing.")
-  }
-
-  func testADistantRevisionWithNothingNewEmitsNothing() {
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "one two three four five six seven eight")
-    XCTAssertTrue(planner.plan(for: "one two THREE four five six seven eight").isEmpty)
-  }
-
-  func testNoEditEverDeletesMoreThanTheRewindLimit() {
-    // Property: however the transcript is revised, the planner never proposes a
-    // deletion longer than the last few words on screen.
-    var planner = VoiceTypeStreamPlanner()
-    let revisions = [
-      "alpha bravo charlie", "alpha bravo charlie delta", "alpha XXXXX charlie delta",
-      "alpha bravo charlie delta echo", "completely different text entirely",
-      "alpha bravo charlie delta echo foxtrot", "a",
-    ]
-    for revision in revisions {
-      let before = planner.typed
-      let limit =
-        before.split(separator: " ", omittingEmptySubsequences: false).count
-          > VoiceTypeStreamPlanner.maxRewindWords
-        ? before.split(separator: " ", omittingEmptySubsequences: false)
-          .suffix(VoiceTypeStreamPlanner.maxRewindWords).joined(separator: " ").count
-        : before.count
-      let edit = planner.plan(for: revision)
-      XCTAssertLessThanOrEqual(
-        edit.backspaces, limit, "deleted \(edit.backspaces) of \(before.count) for \(revision)")
-    }
-  }
-
-  func testUnchangedTranscriptEmitsNothing() {
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "same")
-    XCTAssertTrue(planner.plan(for: "same").isEmpty)
-  }
-
-  func testResetForgetsTheTurnWithoutProposingDeletions() {
-    var planner = VoiceTypeStreamPlanner()
-    _ = planner.plan(for: "first turn")
-    planner.reset()
-    // The next turn must never delete the previous turn's text.
-    XCTAssertEqual(planner.plan(for: "second"), .init(backspaces: 0, insertion: "second"))
-  }
-}
-
-@MainActor
-final class VoiceTypeSessionTests: XCTestCase {
-
-  private final class RecordingSink: KeystrokeSink {
-    private(set) var typed = ""
-    private(set) var deletions: [Int] = []
-    var caretAfterWord = false
-    var focus: String? = "app:1"
-
-    func deleteBackward(_ count: Int) {
-      guard count > 0 else { return }
-      deletions.append(count)
-      typed.removeLast(min(count, typed.count))
-    }
-
-    func insert(_ text: String) {
-      typed += text
-    }
-
-    func caretFollowsWordCharacter() -> Bool { caretAfterWord }
-    func focusTarget() -> String? { focus }
-  }
-
-  func testTypingPausesWhileFocusIsElsewhereAndCatchesUpWhenItReturns() {
-    // Live: a dock click brought Omi's own window forward mid-hold and two
-    // stream commits rewrote text inside it instead of the document.
-    let (session, sink) = makeSession()
-    session.begin()
-    session.update(transcript: "Type hello there")
-    session.update(transcript: "Type hello there my")
-    XCTAssertEqual(sink.typed, "Hello there")
-    sink.focus = "omi:2"
-    session.update(transcript: "Type hello there my friend")
-    session.update(transcript: "Type hello there my friend how", isSettled: true)
-    XCTAssertEqual(sink.typed, "Hello there", "nothing is posted into the other app")
-    sink.focus = "app:1"
-    XCTAssertEqual(
-      session.finish(transcript: "Type hello there my friend how are you"),
-      .typed("Hello there my friend how are you"))
-    XCTAssertEqual(sink.typed, "Hello there my friend how are you", "the document catches up on return")
-  }
-
-  func testAnUnreadableFocusNeverPausesTyping() {
-    let (session, sink) = makeSession()
-    sink.focus = nil
-    session.begin()
-    session.update(transcript: "Type hello there")
-    session.update(transcript: "Type hello there friend")
-    XCTAssertEqual(sink.typed, "Hello there")
-  }
-
-  private func makeSession(trusted: Bool = true) -> (VoiceTypeSession, RecordingSink) {
-    let sink = RecordingSink()
-    return (VoiceTypeSession(sink: sink, isAccessibilityTrusted: { trusted }), sink)
-  }
-
-  func testADictationThatContinuesALineOpensWithASpace() {
-    // Live: a second hold into the same line typed "voiceI think" — the first
-    // word landed flush against the previous turn's last word.
-    let (session, sink) = makeSession()
-    sink.caretAfterWord = true
-    session.begin()
-    session.update(transcript: "Type I think this")
-    session.update(transcript: "Type I think this is")
-    XCTAssertEqual(sink.typed, " I think this")
-    XCTAssertEqual(
-      session.finish(transcript: "Type I think this is good"), .typed("I think this is good"),
-      "the separator is on screen but is not part of what was dictated")
-    XCTAssertEqual(sink.typed, " I think this is good")
-    XCTAssertEqual(sink.deletions, [], "the separator is never retyped")
-  }
-
-  func testABareWakeWordLeavesNoStraySeparator() {
-    let (session, sink) = makeSession()
-    sink.caretAfterWord = true
-    session.begin()
-    session.update(transcript: "Type")
-    session.update(transcript: "Type.")
-    _ = session.finish(transcript: "Type.")
-    XCTAssertEqual(sink.typed, "", "nothing was dictated, so nothing — not even a space — is typed")
-  }
-
-  func testADictationAtALineStartOrAfterASpaceAddsNothing() {
-    let (session, sink) = makeSession()
-    sink.caretAfterWord = false
-    session.begin()
-    session.update(transcript: "Type hello there")
-    session.update(transcript: "Type hello there friend")
-    XCTAssertEqual(sink.typed, "Hello there")
-  }
-
-  func testDictatesStreamedTextAndClaimsTheTurn() {
-    let (session, sink) = makeSession()
-    session.begin()
-    XCTAssertFalse(
-      session.update(transcript: "Type"),
-      "the bare wake word types nothing, so it has not taken the turn from chat yet")
-    XCTAssertEqual(sink.typed, "")
-    XCTAssertFalse(session.update(transcript: "Type hello"))
-    XCTAssertTrue(session.update(transcript: "Type hello there"))
-    XCTAssertEqual(sink.typed, "Hello", "the moving last word waits one probe")
-    XCTAssertEqual(session.finish(transcript: "Type hello there"), .typed("Hello there"))
-    XCTAssertEqual(sink.typed, "Hello there")
-    XCTAssertEqual(sink.deletions, [], "a smooth turn never rewrites what it typed")
-  }
-
-  func testTheExactProbeSequenceFromAFailedLiveTurnDictates() {
-    // Replayed verbatim from a live turn (pid 85563) that typed nothing and let
-    // the model spawn an agent instead. The recognizer heard the wake word on
-    // every probe, so if this passes the fault is in the manager's plumbing,
-    // not in the parser or the stabilizer.
-    let (session, sink) = makeSession()
-    session.begin()
-    for probe in [
-      "Type.",
-      "Type and",
-      "Type. I don't know.",
-      "Type. I don't know.",
-      "Type. I don't know why.",
-      "Type, I don't know why I did that.",
-      "Type, I don't know why I did that.",
-    ] {
-      session.update(transcript: probe)
-    }
-    XCTAssertTrue(session.claimsTurn, "the turn should have been claimed for typing")
-    XCTAssertFalse(sink.typed.isEmpty, "something should have been typed")
-  }
-
-  func testAWakeWordFollowedByAFullStopStillDictates() {
-    // "Type." is what the recognizer returns when the user pauses after the
-    // wake word, which is the natural way to say it.
-    let (session, _) = makeSession()
-    session.begin()
-    session.update(transcript: "Type. Okay, so this is decent I guess.")
-    session.update(transcript: "Type. Okay, so this is decent I guess.")
-    XCTAssertTrue(session.claimsTurn)
-  }
-
-  func testOrdinaryQuestionIsLeftToChatAndTypesNothing() {
-    let (session, sink) = makeSession()
-    session.begin()
-    XCTAssertFalse(session.update(transcript: "what is on my calendar"))
-    XCTAssertEqual(session.finish(transcript: "what is on my calendar"), .none)
-    XCTAssertEqual(sink.typed, "")
-  }
-
-  func testFinalTranscriptCorrectionRewritesWhatWasAlreadyTyped() {
-    let (session, sink) = makeSession()
-    session.begin()
-    session.update(transcript: "Type send it to nate")
-    session.update(transcript: "Type send it to nate")
-    // A late transcript revision (recognizer or lexical correction) lands only
-    // on the closing decode, after the probes have already typed the old text.
-    XCTAssertEqual(session.finish(transcript: "Type send it to Nathan"), .typed("Send it to Nathan"))
-    XCTAssertEqual(sink.typed, "Send it to Nathan")
-  }
-
-  func testASettledStreamUtteranceRewritesTheLocalGuessAndTypingContinuesAfterIt() {
-    // The manager feeds a stream commit as a settled transcript: committed
-    // prefix only, moving edge empty. It may rewrite the whole sentence the
-    // probes guessed, and the next probe's tail appends after it cleanly.
-    let (session, sink) = makeSession()
-    session.begin()
-    session.update(transcript: "Type hello wrold this is a tset")
-    session.update(transcript: "Type hello wrold this is a tset")
-    XCTAssertEqual(sink.typed, "Hello wrold this is a tset")
-    XCTAssertTrue(session.update(transcript: "Type hello world, this is a test.", isSettled: true))
-    XCTAssertEqual(sink.typed, "Hello world, this is a test.")
-    session.update(transcript: "Type hello world, this is a test. and it")
-    XCTAssertTrue(session.update(transcript: "Type hello world, this is a test. and it goes on"))
-    XCTAssertEqual(sink.typed, "Hello world, this is a test. and it")
-    XCTAssertEqual(
-      session.finish(transcript: "Type hello world, this is a test. and it goes on"),
-      .typed("Hello world, this is a test. and it goes on"))
-  }
-
-  func testTurnStaysWithTypingOnceArmedEvenIfLaterTextLooksLikeAQuestion() {
-    let (session, sink) = makeSession()
-    session.begin()
-    XCTAssertFalse(
-      session.update(transcript: "Type what is on my calendar"),
-      "the first decode of a turn has nothing to agree with yet")
-    XCTAssertTrue(session.update(transcript: "Type what is on my calendar"))
-    XCTAssertEqual(
-      session.finish(transcript: "Type what is on my calendar"),
-      .typed("What is on my calendar"))
-    XCTAssertEqual(sink.typed, "What is on my calendar")
-  }
-
-  func testWithoutAccessibilityTheTurnIsReleasedToChatRatherThanSwallowed() {
-    // Fail-open: the words still reach Omi instead of disappearing into a
-    // keystroke sink the app is not allowed to use.
-    let (session, sink) = makeSession(trusted: false)
-    session.begin()
-    XCTAssertFalse(session.update(transcript: "Type hello"))
-    XCTAssertEqual(session.finish(transcript: "Type hello"), .none)
-    XCTAssertEqual(sink.typed, "")
-  }
-
-  func testEarlyFragmentDoesNotDisableTypingForTheRestOfTheTurn() {
-    // The bug this guards, observed live: the first on-device decode of a hold
-    // is one or two characters of a half-spoken word. Treating that as "not a
-    // type command" latched the turn to chat before the user had finished
-    // saying "Type", which silently disabled the feature on every real turn.
-    let (session, sink) = makeSession()
-    session.begin()
-    XCTAssertFalse(session.update(transcript: "So"))
-    XCTAssertFalse(session.update(transcript: "Ty"))
-    XCTAssertFalse(session.update(transcript: "Type hello"))
-    XCTAssertEqual(session.finish(transcript: "Type hello there"), .typed("Hello there"))
-    XCTAssertEqual(sink.typed, "Hello there")
-  }
-
-  func testANewTurnNeverDeletesThePreviousTurnsText() {
-    let (session, sink) = makeSession()
-    session.begin()
-    session.update(transcript: "Type first")
-    _ = session.finish(transcript: "Type first")
-    session.begin()
-    session.update(transcript: "Type second")
-    _ = session.finish(transcript: "Type second")
-    XCTAssertEqual(sink.typed, "FirstSecond")
-    XCTAssertEqual(sink.deletions, [])
-  }
-
-  func testCompletionCarriesExactlyWhatReachedTheFocusedApp() {
-    // The chat record says "Typed: <text>", so the completion has to report the
-    // text that actually landed — not the raw utterance, which still carries the
-    // "Type" wake word the user never meant to dictate.
-    let (session, sink) = makeSession()
-    session.begin()
-    session.update(transcript: "Type hello there")
-    let completion = session.finish(transcript: "Type hello there")
-    XCTAssertEqual(completion, .typed("Hello there"))
-    XCTAssertEqual(completion, .typed(sink.typed))
-  }
-
-  func testAFlushedTurnReportsTheWholeSentenceNotJustTheProbedPrefix() {
-    // The closing decode arrives after the key is up. Journaling what the probes
-    // had delivered at key-up would record a truncated sentence.
-    let (session, _) = makeSession()
-    session.begin()
-    session.update(transcript: "Type hello")
-    session.update(transcript: "Type hello")
-    let token = session.beginFlush()
-    XCTAssertEqual(
-      session.endFlush(token: token, finalTranscript: "Type hello there friend"),
-      .typed("Hello there friend"))
-  }
-
-  func testATurnThatNeverDictatedReportsNothingToJournal() {
-    let (session, _) = makeSession()
-    session.begin()
-    session.update(transcript: "what is on my calendar")
-    let token = session.beginFlush()
-    XCTAssertEqual(
-      session.endFlush(token: token, finalTranscript: "what is on my calendar"), .none)
-  }
-
-  func testOnlyTheOpenFlushWindowIsOwned() {
-    // The backend stream is finalized asynchronously, so the caller waits for
-    // its last words. It must not close a turn that has since been replaced.
-    let (session, _) = makeSession()
-    session.begin()
-    session.update(transcript: "Type hello")
-    let token = session.beginFlush()
-    XCTAssertTrue(session.isFlushing(token: token))
-    session.begin()
-    XCTAssertFalse(
-      session.isFlushing(token: token), "a new turn invalidates the previous flush window")
-  }
-
-  func testAClosedFlushIsNoLongerOwned() {
-    let (session, _) = makeSession()
-    session.begin()
-    session.update(transcript: "Type hello")
-    let token = session.beginFlush()
-    _ = session.endFlush(token: token, finalTranscript: "Type hello there")
-    XCTAssertFalse(session.isFlushing(token: token))
-  }
-
-  func testAStaleFlushReportsNothingSoItCannotJournalIntoTheNextTurn() {
-    let (session, _) = makeSession()
-    session.begin()
-    session.update(transcript: "Type first")
-    let stale = session.beginFlush()
-    session.begin()
-    XCTAssertEqual(session.endFlush(token: stale, finalTranscript: "Type first"), .none)
-  }
-}
-
-final class VoiceTypeDecodeWindowTests: XCTestCase {
-
-  private func audio(seconds: Double) -> Data {
-    Data(count: Int(seconds * 16_000) * 2)
-  }
-
-  func testAShortWindowIsNotCommittedYet() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 3))
-    XCTAssertFalse(w.commitIfReady(tail: "hello there", endsQuiet: true, tailIsStable: true))
-    XCTAssertFalse(w.hasCommitted)
-    XCTAssertEqual(w.transcript(tail: "hello there"), "hello there")
-  }
-
-  func testCommitsAtAPauseOnceLongEnoughAndDropsThatAudio() {
-    // Once text is typed it stops being reconsidered, and its audio stops
-    // being decoded — that is what keeps every probe cheap on a long hold.
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 7))
-    XCTAssertTrue(w.commitIfReady(tail: "the first part", endsQuiet: true, tailIsStable: true))
-    XCTAssertEqual(w.pendingAudio.count, 0, "committed audio is dropped")
-    XCTAssertEqual(
-      w.transcript(tail: "and the rest"), "the first part and the rest",
-      "the planner still receives the whole utterance")
-  }
-
-  func testMidWordIsNotCutWhileTheSpeakerIsStillTalking() {
-    // Committing mid-word hands the next window a fragment, which it spells
-    // wrong. Past the target the window waits for a pause.
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 7))
-    XCTAssertFalse(w.commitIfReady(tail: "still going", endsQuiet: false, tailIsStable: true))
-    XCTAssertFalse(w.hasCommitted)
-  }
-
-  func testASpeakerWhoNeverPausesIsForcedAtTheHardLimit() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 21))
-    XCTAssertTrue(w.commitIfReady(tail: "no breath at all", endsQuiet: false, tailIsStable: false))
-    XCTAssertEqual(w.pendingAudio.count, 0)
-  }
-
-  func testCommittingRepeatsSoAHoldHasNoLengthLimit() {
-    var w = VoiceTypeDecodeWindow()
-    for word in ["one", "two", "three"] {
-      w.append(audio(seconds: 7))
-      XCTAssertTrue(w.commitIfReady(tail: word, endsQuiet: true, tailIsStable: true))
-    }
-    XCTAssertEqual(w.transcript(tail: "four"), "one two three four")
-    XCTAssertEqual(w.pendingAudio.count, 0)
-  }
-
-  func testASilentWindowIsNeverCommitted() {
-    // Committing silence would strand the rest of the turn behind a prefix
-    // that can never be revised.
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 25))
-    XCTAssertFalse(w.commitIfReady(tail: "   ", endsQuiet: true, tailIsStable: true))
-    XCTAssertFalse(w.hasCommitted)
-  }
-
-  private func bytes(seconds: Double) -> Int { Int(seconds * 16_000) * 2 }
-
-  /// Speech-level PCM (well above `VoiceTypeAudioTrim.speechRMSThreshold`).
-  private func loud(seconds: Double) -> Data {
-    var data = Data(capacity: bytes(seconds: seconds))
-    for index in 0..<Int(seconds * 16_000) {
-      let value = Int16(index % 2 == 0 ? 3000 : -3000)
-      withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
-    }
-    return data
-  }
-
-  func testAStreamSeamInsideAWordSlidesForwardToTheNextPause() {
-    // The stream's utterance `end` landed 100 ms before the word stopped
-    // sounding. Cutting there gave the next window the word's last syllable,
-    // typed as a word of its own ("thinking ng"). The seam moves to the pause.
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 2.0))
-    w.append(audio(seconds: 0.5))  // the pause
-    w.append(loud(seconds: 1.0))  // the next word
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: "Type this is thinking.", startByte: 0, endByte: bytes(seconds: 1.9)),
-      .adopted)
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 2.0), "the seam is at the start of the pause, not inside the word")
-    XCTAssertEqual(w.pendingAudio.count, bytes(seconds: 1.5))
-  }
-
-  func testAStreamFinalAfterUncommittedSpeechIsRefused() {
-    // Live: a forced local cut at 20 s, the stream's straddling utterance
-    // refused, then its next final (from 29.9 s) adopted — and the two
-    // sentences spoken between 20 s and 29.9 s were dropped with the audio,
-    // having only ever been the moving edge.
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 20))
-    XCTAssertTrue(w.commitIfReady(tail: "type first twenty seconds", endsQuiet: false, tailIsStable: false))
-    w.append(loud(seconds: 10))  // speech the local decode is still typing
-    w.append(audio(seconds: 0.5))
-    w.append(loud(seconds: 4))  // the utterance the stream finished
-    w.append(audio(seconds: 1))
-    XCTAssertEqual(
-      w.adoptStreamFinal(
-        text: "Let me know if you want a ticket.",
-        startByte: bytes(seconds: 30.5), endByte: bytes(seconds: 34.5)),
-      .uncommittedSpeechBefore)
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 20), "nothing is dropped")
-    XCTAssertEqual(w.committedText, "type first twenty seconds")
-  }
-
-  func testASubHalfSecondGapIsNotDecodedAndNotAnObstacle() {
-    // A breath or a syllable's tail between a local commit and the stream's
-    // next utterance decoded as "Thank you." — twice in one hold.
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 6))
-    XCTAssertTrue(w.commitIfReady(tail: "type six seconds", endsQuiet: true, tailIsStable: true))
-    w.append(loud(seconds: 0.3))
-    w.append(audio(seconds: 0.4))
-    w.append(loud(seconds: 3))
-    XCTAssertNil(w.uncommittedSpeech(before: bytes(seconds: 6.7)))
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: "and then more.", startByte: bytes(seconds: 6.7), endByte: bytes(seconds: 9.7)),
-      .adopted)
-  }
-
-  func testAStreamFinalAfterASilentGapIsAdoptedAndTheGapDropped() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 6))
-    XCTAssertTrue(w.commitIfReady(tail: "type six seconds", endsQuiet: true, tailIsStable: true))
-    w.append(audio(seconds: 2.5))  // the speaker thinks
-    w.append(loud(seconds: 3))
-    w.append(audio(seconds: 1))
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: "and then more.", startByte: bytes(seconds: 8.5), endByte: bytes(seconds: 11.5)),
-      .adopted)
-    XCTAssertEqual(w.committedText, "type six seconds and then more.")
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 11.5))
-  }
-
-  func testAStreamSeamAlreadyOnAPauseStaysPut() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 2.0))
-    w.append(audio(seconds: 1.0))
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: "Type words.", startByte: 0, endByte: bytes(seconds: 2.2)),
-      .adopted)
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 2.2))
-  }
-
-  func testAStreamSeamWithNoPauseInReachCutsWhereTheStreamSaid() {
-    // A speaker who does not pause after the utterance: better one clipped
-    // syllable than dropping a second of speech looking for silence.
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 4.0))
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: "Type nonstop.", startByte: 0, endByte: bytes(seconds: 1.5)),
-      .adopted)
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 1.5))
-  }
-
-  func testAStreamFinalCommitsItsStretchAndDropsExactlyThatAudio() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 5))
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: " Type hello world. ", startByte: 0, endByte: bytes(seconds: 3)),
-      .adopted)
-    XCTAssertEqual(w.committedText, "Type hello world.")
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 3))
-    XCTAssertEqual(w.pendingAudio.count, bytes(seconds: 2), "the audio after the utterance stays pending")
-    XCTAssertEqual(w.transcript(tail: "this is"), "Type hello world. this is")
-  }
-
-  func testConsecutiveStreamFinalsAccumulateInsteadOfReplacing() {
-    // The live bug: the stream forwards one finished utterance per message —
-    // a delta, never the whole transcript. Replacing the transcript with each
-    // message left "This is a test." without its wake word, and typing froze
-    // after the first pause. Each final must extend the committed prefix.
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 10))
-    w.adoptStreamFinal(text: "Type hello world.", startByte: 0, endByte: bytes(seconds: 3))
-    XCTAssertEqual(
-      w.adoptStreamFinal(
-        text: "This is a test.", startByte: bytes(seconds: 3.5), endByte: bytes(seconds: 6)),
-      .adopted)
-    XCTAssertEqual(w.committedText, "Type hello world. This is a test.")
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 6))
-    XCTAssertEqual(w.pendingAudio.count, bytes(seconds: 4))
-  }
-
-  func testAStreamFinalInsideALocallyCommittedRegionIsDroppedNotTypedTwice() {
-    // The local decode froze this pause first (the stream was slow). The
-    // stream's version of the same words arrives later and must not be
-    // appended as a second copy of the sentence.
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 8))
-    XCTAssertTrue(w.commitIfReady(tail: "type local words here", endsQuiet: true, tailIsStable: true))
-    let consumed = w.consumedBytes
-    XCTAssertEqual(
-      w.adoptStreamFinal(text: "Type local words here.", startByte: 0, endByte: bytes(seconds: 7)),
-      .alreadyCommitted)
-    XCTAssertEqual(w.committedText, "type local words here")
-    XCTAssertEqual(w.consumedBytes, consumed)
-  }
-
-  func testAStreamFinalThatStraddlesTheConsumedEdgeIsDropped() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 8))
-    XCTAssertTrue(w.commitIfReady(tail: "type first part", endsQuiet: true, tailIsStable: true))
-    w.append(audio(seconds: 4))
-    XCTAssertEqual(
-      w.adoptStreamFinal(
-        text: "first part and more", startByte: bytes(seconds: 6), endByte: bytes(seconds: 10)),
-      .alreadyCommitted, "an utterance that began inside frozen audio belongs to the local commit")
-    XCTAssertEqual(w.pendingAudio.count, bytes(seconds: 4), "no pending audio is dropped for a refused final")
-  }
-
-  func testStreamPositionsAreTurnRelativeSoALateSocketStillAligns() {
-    // The stream opened after a local commit: its time zero is the consumed
-    // edge, and the caller offsets its positions by that origin. What matters
-    // here is that the window trims by absolute turn position, never by
-    // stream-relative seconds.
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 8))
-    XCTAssertTrue(w.commitIfReady(tail: "type opening words", endsQuiet: true, tailIsStable: true))
-    let origin = w.consumedBytes
-    w.append(audio(seconds: 6))
-    XCTAssertEqual(
-      w.adoptStreamFinal(
-        text: "and the rest.", startByte: origin + bytes(seconds: 0.2), endByte: origin + bytes(seconds: 4)),
-      .adopted)
-    XCTAssertEqual(w.committedText, "type opening words and the rest.")
-    XCTAssertEqual(w.pendingAudio.count, bytes(seconds: 2))
-  }
-
-  func testEmptyOrAlreadyPastFinalsAreIgnored() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 4))
-    XCTAssertEqual(w.adoptStreamFinal(text: "  ", startByte: 0, endByte: bytes(seconds: 2)), .ignored)
-    XCTAssertEqual(w.adoptStreamFinal(text: "x", startByte: 0, endByte: 0), .ignored)
-    XCTAssertFalse(w.hasCommitted)
-    XCTAssertEqual(w.pendingAudio.count, bytes(seconds: 4))
-  }
-
-  func testAWindowOpeningMidSentenceIsNotCapitalized() {
-    // Each window is a fresh utterance to the recognizer, which capitalizes
-    // its first word. Live: "However, A few users still report".
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 7))
-    XCTAssertTrue(w.commitIfReady(tail: "Type on most devices. However,", endsQuiet: true, tailIsStable: true))
-    XCTAssertEqual(
-      w.transcript(tail: "A few users still report"),
-      "Type on most devices. However, a few users still report")
-  }
-
-  func testAWindowOpeningANewSentenceKeepsItsCapital() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 7))
-    XCTAssertTrue(w.commitIfReady(tail: "Type it fixed the issue.", endsQuiet: true, tailIsStable: true))
-    XCTAssertEqual(w.transcript(tail: "However, a few"), "Type it fixed the issue. However, a few")
-    XCTAssertEqual(
-      VoiceTypeDecodeWindow.continuingSentence(after: "send it to", tail: "I think"), "I think",
-      "the pronoun keeps its capital")
-    XCTAssertEqual(
-      VoiceTypeDecodeWindow.continuingSentence(after: "send it to", tail: "I'll go"), "I'll go")
-    XCTAssertEqual(
-      VoiceTypeDecodeWindow.continuingSentence(after: "the", tail: "API is down"), "API is down",
-      "an acronym keeps its capitals")
-  }
-
-  func testUncommittedSpeechBeforeAFinalIsHandedBackForALocalDecode() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 20))
-    XCTAssertTrue(w.commitIfReady(tail: "type first twenty seconds", endsQuiet: false, tailIsStable: false))
-    w.append(loud(seconds: 10))
-    w.append(audio(seconds: 0.5))
-    w.append(loud(seconds: 4))
-    let gap = w.uncommittedSpeech(before: bytes(seconds: 30.5))
-    XCTAssertEqual(gap?.count, bytes(seconds: 10.5), "the ten seconds of speech plus the pause before the utterance")
-    XCTAssertNil(w.uncommittedSpeech(before: bytes(seconds: 20)), "no gap, nothing to decode")
-    // Committed together, from the consumed edge, the final no longer follows a gap.
-    XCTAssertEqual(
-      w.adoptStreamFinal(
-        text: "and the ten seconds Let me know.", startByte: bytes(seconds: 20), endByte: bytes(seconds: 34.5)),
-      .adopted)
-    XCTAssertEqual(w.committedText, "type first twenty seconds and the ten seconds Let me know.")
-  }
-
-  func testPendingAudioStaysZeroIndexedAfterAStreamCommit() {
-    // Crashed live: `removeFirst` left `pendingAudio` starting at the dropped
-    // offset, and the trimmer's absolute `subdata(in:)` trapped on the first
-    // probe after a stream commit.
-    var w = VoiceTypeDecodeWindow()
-    w.append(loud(seconds: 3))
-    w.append(audio(seconds: 0.5))
-    w.append(loud(seconds: 2))
-    XCTAssertEqual(w.adoptStreamFinal(text: "Type first.", startByte: 0, endByte: bytes(seconds: 3)), .adopted)
-    XCTAssertEqual(w.pendingAudio.startIndex, 0)
-    XCTAssertEqual(VoiceTypeAudioTrim.trimmingLeadingSilence(w.pendingAudio).count, bytes(seconds: 2) + 3_200)
-    XCTAssertNotNil(w.uncommittedSpeech(before: w.appendedBytes))
-    XCTAssertFalse(VoiceTypeAudioTrim.endsQuiet(w.pendingAudio))
-  }
-
-  func testTheTrimmerHandlesASlicedBuffer() {
-    var data = Data(count: bytes(seconds: 1))
-    data.append(loud(seconds: 1))
-    let slice = data.dropFirst(bytes(seconds: 0.5))
-    XCTAssertEqual(VoiceTypeAudioTrim.trimmingLeadingSilence(slice).count, bytes(seconds: 1) + 3_200)
-  }
-
-  func testAppendedBytesTrackTheTurnTimeline() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 7))
-    XCTAssertTrue(w.commitIfReady(tail: "type seven seconds", endsQuiet: true, tailIsStable: true))
-    w.append(audio(seconds: 2))
-    XCTAssertEqual(w.consumedBytes, bytes(seconds: 7))
-    XCTAssertEqual(w.appendedBytes, bytes(seconds: 9))
-    w.reset()
-    XCTAssertEqual(w.consumedBytes, 0)
-    XCTAssertEqual(w.appendedBytes, 0)
-  }
-
-  func testResetForgetsTheTurn() {
-    var w = VoiceTypeDecodeWindow()
-    w.append(audio(seconds: 7))
-    _ = w.commitIfReady(tail: "previous turn", endsQuiet: true, tailIsStable: true)
-    w.reset()
-    XCTAssertFalse(w.hasCommitted)
-    XCTAssertEqual(w.pendingAudio.count, 0)
-    XCTAssertEqual(w.transcript(tail: "new turn"), "new turn")
-  }
-}
-
-final class VoiceTypeAudioPauseTests: XCTestCase {
-
-  func testSilenceAtTheEndReadsAsAPause() {
-    let speech = (0..<16_000).map { Int16(truncatingIfNeeded: ($0 % 2 == 0 ? 6_000 : -6_000)) }
-    var samples = speech
-    samples.append(contentsOf: [Int16](repeating: 0, count: 16_000))
-    var copy = samples.map { $0.littleEndian }
-    let data = copy.withUnsafeMutableBufferPointer { Data(buffer: $0) }
-    XCTAssertTrue(VoiceTypeAudioTrim.endsQuiet(data))
-  }
-
-  func testSpeechAtTheEndIsNotAPause() {
-    let speech = (0..<32_000).map { Int16(truncatingIfNeeded: ($0 % 2 == 0 ? 6_000 : -6_000)) }
-    var copy = speech.map { $0.littleEndian }
-    let data = copy.withUnsafeMutableBufferPointer { Data(buffer: $0) }
-    XCTAssertFalse(VoiceTypeAudioTrim.endsQuiet(data))
-  }
-}
-
-final class DictationLexicalCorrectionTests: XCTestCase {
-
-  func testAnOnScreenNameCorrectsAGreetingTarget() {
-    // What the corrector actually covers: a name in a greeting construct.
-    // Dictation decoded straight from the recognizer and never got even this.
-    XCTAssertEqual(
-      PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: ["Nathan"]),
-      "send hi to Nathan")
-  }
-
-  func testCorrectionIsIdempotentSoCorrectingEveryProbeCannotFlicker() {
-    // The stabilizer releases text once two consecutive decodes agree. If
-    // correction were unstable, correcting each probe would break that
-    // agreement and reintroduce the flicker the stabilizer exists to remove.
-    let once = PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: ["Nathan"])
-    let twice = PTTTranscriptContextualCorrector.correct(once, keywords: ["Nathan"])
-    XCTAssertEqual(once, twice)
-  }
-
-  func testTheCorrectorLeavesAWakeWordIntact() {
-    // Dictation now runs every probe through the corrector. If it altered the
-    // opening word at all, the parser would stop recognising the command.
-    for probe in [
-      "Type.",
-      "Type. I don't know.",
-      "Type, I don't know why I did that.",
-      "Type. Okay, so this is decent I guess.",
-    ] {
-      XCTAssertEqual(
-        PTTTranscriptContextualCorrector.correct(probe, keywords: []), probe,
-        "the corrector must not touch \(probe)")
-    }
-  }
-
-  func testNoKeywordsLeavesDictationAlone() {
-    // With Screen Recording denied there are no keywords, and dictation must
-    // still be typed exactly as heard.
-    XCTAssertEqual(
-      PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: []),
-      "send hi to nate")
-  }
-
-  func testAnOnScreenNameOutsideAGreetingIsNotCorrected() {
-    // The limit of the existing corrector, pinned so it is not mistaken for
-    // general proper-noun correction: plain dictation is left as heard even
-    // with the right spelling on screen. Closing this gap needs recognizer-level
-    // vocabulary biasing, not another regex.
-    XCTAssertEqual(
-      PTTTranscriptContextualCorrector.correct("send it to nate", keywords: ["Nathan"]),
-      "send it to nate")
-  }
-}
-
-final class PTTRoutePolicyTests: XCTestCase {
-
-  func testNoNetworkDictatesOnDeviceInsteadOfWaitingForAHubItCannotReach() {
-    // The bug this guards: offline, every remote route (hub, omni, batch STT) is
-    // unreachable, so a turn spent its whole warm deadline before failing and
-    // typed nothing — while the model that could have typed it was already
-    // loaded on-device.
-    XCTAssertEqual(
-      PTTRoutePolicy.decide(isOnline: false, admitsImmediately: false), .onDeviceDictation)
-  }
-
-  func testNoNetworkWinsOverAHubThatClaimsToBeAdmitted() {
-    // An admitted hub is a socket that was admitted, not one that can still
-    // carry the turn. With no path, believing it costs the user the turn.
-    XCTAssertEqual(
-      PTTRoutePolicy.decide(isOnline: false, admitsImmediately: true), .onDeviceDictation)
-  }
-
-  func testOnlineKeepsTheExistingHubRouting() {
-    XCTAssertEqual(
-      PTTRoutePolicy.decide(isOnline: true, admitsImmediately: true), .hubImmediate)
-    XCTAssertEqual(
-      PTTRoutePolicy.decide(isOnline: true, admitsImmediately: false), .hubWarmWait)
-  }
-}
+private func silence(_ seconds: Double) -> Data { pcm(seconds: seconds, amplitude: 5) }
+private func speech(_ seconds: Double) -> Data { pcm(seconds: seconds, amplitude: 8_000) }
 
 final class VoiceTypeAudioTrimTests: XCTestCase {
 
-  private func pcm(_ samples: [Int16]) -> Data {
-    var copy = samples.map { $0.littleEndian }
-    return copy.withUnsafeMutableBufferPointer { Data(buffer: $0) }
+  func testLeadingRoomToneIsDroppedAndThePreRollKept() {
+    let trimmed = VoiceTypeAudioTrim.trimmingLeadingSilence(silence(3) + speech(1))
+    // 1 s of speech plus the 100 ms pre-roll, and nothing like the 3 s lead-in.
+    XCTAssertGreaterThan(trimmed.count, speech(1).count)
+    XCTAssertLessThan(trimmed.count, speech(1.5).count)
   }
 
-  func testLeadingSilenceIsDroppedBeforeTheFirstSpeech() {
-    // A locked hold starts when the key is tapped, not when the user speaks.
-    // Live, 9s of room tone decoded as 43 characters of invented words.
-    let silence = [Int16](repeating: 0, count: 16_000)
-    let speech = (0..<16_000).map { Int16(truncatingIfNeeded: ($0 % 2 == 0 ? 6_000 : -6_000)) }
-    let trimmed = VoiceTypeAudioTrim.trimmingLeadingSilence(pcm(silence + speech))
-    let trimmedSamples = trimmed.count / 2
-    // The speech survives, plus at most the 100ms pre-roll in front of it.
-    XCTAssertGreaterThanOrEqual(trimmedSamples, 16_000)
-    XCTAssertLessThanOrEqual(trimmedSamples, 16_000 + 1_600)
+  /// A hold ends when the key comes up, not when the user stops talking, so the
+  /// tail is room tone that a recognizer answers with an invented phrase.
+  func testTrailingRoomToneIsDroppedAndThePostRollKept() {
+    let trimmed = VoiceTypeAudioTrim.trimmingTrailingSilence(speech(1) + silence(3))
+    XCTAssertGreaterThan(trimmed.count, speech(1).count)
+    XCTAssertLessThan(trimmed.count, speech(1.5).count)
+  }
+
+  func testBothEndsAtOnce() {
+    let trimmed = VoiceTypeAudioTrim.trimmingSilence(silence(2) + speech(1) + silence(2))
+    XCTAssertGreaterThan(trimmed.count, speech(1).count)
+    XCTAssertLessThan(trimmed.count, speech(1.5).count)
   }
 
   func testAnEntirelyQuietBufferTrimsToNothing() {
-    let quiet = [Int16](repeating: 3, count: 32_000)
-    XCTAssertTrue(VoiceTypeAudioTrim.trimmingLeadingSilence(pcm(quiet)).isEmpty)
+    XCTAssertTrue(VoiceTypeAudioTrim.trimmingSilence(silence(4)).isEmpty)
+    XCTAssertTrue(VoiceTypeAudioTrim.trimmingLeadingSilence(silence(4)).isEmpty)
+    XCTAssertTrue(VoiceTypeAudioTrim.trimmingTrailingSilence(silence(4)).isEmpty)
   }
 
-  func testSpeechFromTheFirstSampleIsKeptWhole() {
-    let speech = (0..<16_000).map { Int16(truncatingIfNeeded: ($0 % 2 == 0 ? 6_000 : -6_000)) }
-    XCTAssertEqual(VoiceTypeAudioTrim.trimmingLeadingSilence(pcm(speech)).count, 32_000)
+  func testSpeechBytesCountsOnlyTheVoicedWindows() {
+    XCTAssertEqual(VoiceTypeAudioTrim.speechBytes(in: silence(2)), 0)
+    let mixed = VoiceTypeAudioTrim.speechBytes(in: silence(1) + speech(1))
+    XCTAssertGreaterThan(mixed, speech(0.9).count)
+    XCTAssertLessThanOrEqual(mixed, speech(1).count)
   }
 }
 
-final class VoiceTypeStabilizerTests: XCTestCase {
+final class VoiceTypeUtteranceTests: XCTestCase {
 
-  func testAWordStillBeingSpelledIsHeldBack() {
-    // The bug this guards: typing the decoder's moving edge and rewriting it a
-    // probe later, which reads as flicker.
-    var stabilizer = VoiceTypeStabilizer()
-    _ = stabilizer.stabilized("type hell")
-    XCTAssertEqual(stabilizer.stabilized("type hello"), "type ")
+  func testHoldsEveryChunkOfTheTurn() {
+    var utterance = VoiceTypeUtterance()
+    utterance.append(speech(0.5))
+    utterance.append(speech(0.5))
+    XCTAssertEqual(utterance.audio.count, speech(1).count)
+    XCTAssertEqual(utterance.seconds, 1, accuracy: 0.01)
+    XCTAssertFalse(utterance.didTruncate)
   }
 
-  func testWholeWordsAreReleasedWithoutWaitingAnotherProbe() {
-    var stabilizer = VoiceTypeStabilizer()
-    _ = stabilizer.stabilized("type hello")
-    // The newer decode continues with a space, so "hello" is settled — holding
-    // it back another probe would cost a word of latency and buy nothing.
-    XCTAssertEqual(stabilizer.stabilized("type hello there"), "type hello")
+  /// The cap has to bite before the backend batch endpoint would answer 413.
+  func testTruncatesAtTheCapAndSaysSo() {
+    var utterance = VoiceTypeUtterance(maxBytes: speech(1).count)
+    utterance.append(speech(2))
+    XCTAssertEqual(utterance.audio.count, speech(1).count)
+    XCTAssertTrue(utterance.didTruncate)
   }
 
-  func testAnUnchangedDecodeReleasesInFull() {
-    // A pause in speech should let the text catch up completely.
-    var stabilizer = VoiceTypeStabilizer()
-    _ = stabilizer.stabilized("type hello there")
-    XCTAssertEqual(stabilizer.stabilized("type hello there"), "type hello there")
+  func testChunksArrivingAfterTheCapAreDropped() {
+    var utterance = VoiceTypeUtterance(maxBytes: speech(1).count)
+    utterance.append(speech(1))
+    XCTAssertFalse(utterance.didTruncate)
+    utterance.append(speech(1))
+    XCTAssertEqual(utterance.audio.count, speech(1).count)
+    XCTAssertTrue(utterance.didTruncate)
   }
 
-  func testARevisedEarlierWordIsNotReleasedAsIfAgreed() {
-    var stabilizer = VoiceTypeStabilizer()
-    _ = stabilizer.stabilized("type wright it down")
-    XCTAssertEqual(stabilizer.stabilized("type write it down"), "type ")
+  func testASilentHoldHasNothingToDecode() {
+    var utterance = VoiceTypeUtterance()
+    utterance.append(silence(4))
+    XCTAssertNil(utterance.decodableAudio())
   }
 
-  func testSettleReleasesTheClosingTranscriptWhole() {
-    var stabilizer = VoiceTypeStabilizer()
-    _ = stabilizer.stabilized("type hello th")
-    XCTAssertEqual(stabilizer.settle("type hello there"), "type hello there")
+  /// Below half a second of voice there is no word to recover, only a breath,
+  /// and the on-device decoder answers those with an invented phrase.
+  func testABreathIsNotWorthDecoding() {
+    var utterance = VoiceTypeUtterance()
+    utterance.append(silence(1) + speech(0.2) + silence(1))
+    XCTAssertNil(utterance.decodableAudio())
+  }
+
+  func testRealSpeechIsHandedOverSilenceTrimmed() {
+    var utterance = VoiceTypeUtterance()
+    utterance.append(silence(2) + speech(2) + silence(2))
+    let decodable = utterance.decodableAudio()
+    XCTAssertNotNil(decodable)
+    XCTAssertLessThan(decodable?.count ?? .max, utterance.audio.count)
+    XCTAssertGreaterThan(decodable?.count ?? 0, speech(2).count)
+  }
+
+  func testResetClearsTheTurn() {
+    var utterance = VoiceTypeUtterance(maxBytes: speech(1).count)
+    utterance.append(speech(2))
+    utterance.reset()
+    XCTAssertTrue(utterance.audio.isEmpty)
+    XCTAssertFalse(utterance.didTruncate)
+    XCTAssertNil(utterance.decodableAudio())
+  }
+}
+
+// MARK: - Transcription
+
+final class VoiceTypeTranscriberTests: XCTestCase {
+
+  /// A recognizer that never answers, and is cancelled by the winner of the race.
+  private static func neverAnswers() async -> String? {
+    await suspendUntilCancelled()
+    return nil
+  }
+
+  private func transcriber(
+    cloud: @escaping VoiceTypeTranscriber.Cloud,
+    onDevice: @escaping VoiceTypeTranscriber.OnDevice,
+    isReachable: Bool = true,
+    budgetExpiresFirst: Bool = false
+  ) -> VoiceTypeTranscriber {
+    VoiceTypeTranscriber(
+      cloud: cloud,
+      onDevice: onDevice,
+      isReachable: { isReachable },
+      // The budget is either instant or never expires, so which side of the
+      // race wins is a property of the test rather than of the machine.
+      sleep: { _ in
+        if !budgetExpiresFirst { await suspendUntilCancelled() }
+      })
+  }
+
+  func testTheCloudTranscriptWinsWhenItAnswersInTime() async {
+    let subject = transcriber(
+      cloud: { _, _ in "the cloud heard this" },
+      onDevice: { _ in "the local model heard this" })
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertEqual(outcome.transcript?.text, "the cloud heard this")
+    XCTAssertEqual(outcome.transcript?.source, .cloudBatch)
+    XCTAssertNil(outcome.degradation)
+  }
+
+  func testTheOnScreenKeywordsReachTheCloudRecognizer() async {
+    let seen = KeywordBox()
+    let subject = transcriber(
+      cloud: { _, keywords in
+        await seen.record(keywords)
+        return "biased transcript"
+      },
+      onDevice: { _ in nil })
+    _ = await subject.transcribe(speech(1), keywords: ["Nathan", "Parakeet"])
+    let recorded = await seen.keywords
+    XCTAssertEqual(recorded, ["Nathan", "Parakeet"])
+  }
+
+  /// Offline the cloud is not merely slow, it is unreachable, and nothing
+  /// should spend the budget discovering that.
+  func testOfflineDictationUsesTheOnDeviceModel() async {
+    let subject = transcriber(
+      cloud: { _, _ in
+        XCTFail("the cloud must not be called with no network")
+        return nil
+      },
+      onDevice: { _ in "the local model heard this" },
+      isReachable: false)
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertEqual(outcome.transcript?.text, "the local model heard this")
+    XCTAssertEqual(outcome.transcript?.source, .onDevice)
+    XCTAssertEqual(outcome.degradation, .network)
+  }
+
+  func testAFailingCloudRequestFallsBackToTheOnDeviceModel() async {
+    struct Boom: Error {}
+    let subject = transcriber(
+      cloud: { _, _ in throw Boom() },
+      onDevice: { _ in "the local model heard this" })
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertEqual(outcome.transcript?.source, .onDevice)
+    XCTAssertEqual(outcome.degradation, .error)
+  }
+
+  func testAnEmptyCloudTranscriptFallsBackToTheOnDeviceModel() async {
+    let subject = transcriber(
+      cloud: { _, _ in "   " },
+      onDevice: { _ in "the local model heard this" })
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertEqual(outcome.transcript?.source, .onDevice)
+    XCTAssertEqual(outcome.degradation, .empty)
+  }
+
+  /// The whole reason both recognizers start together: the budget can expire
+  /// without the dictation degrading to nothing, because the on-device answer
+  /// is already in hand.
+  func testABudgetExpiryPastesTheOnDeviceTranscriptRatherThanNothing() async {
+    let subject = transcriber(
+      cloud: { _, _ in await Self.neverAnswers() },
+      onDevice: { _ in "the local model heard this" },
+      budgetExpiresFirst: true)
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertEqual(outcome.transcript?.text, "the local model heard this")
+    XCTAssertEqual(outcome.transcript?.source, .onDevice)
+    XCTAssertEqual(outcome.degradation, .timeout)
+  }
+
+  func testATurnNeitherRecognizerHeardProducesNoTranscript() async {
+    let subject = transcriber(cloud: { _, _ in nil }, onDevice: { _ in nil })
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertNil(outcome.transcript)
+    XCTAssertEqual(outcome.degradation, .empty)
+  }
+
+  func testEmptyAudioIsNotSentToEitherRecognizer() async {
+    let subject = transcriber(
+      cloud: { _, _ in
+        XCTFail("empty audio must not be transcribed")
+        return nil
+      },
+      onDevice: { _ in
+        XCTFail("empty audio must not be transcribed")
+        return nil
+      })
+    let outcome = await subject.transcribe(Data(), keywords: [])
+    XCTAssertNil(outcome.transcript)
+    XCTAssertNil(outcome.degradation)
+  }
+
+  func testWhitespaceIsTrimmedOffTheChosenTranscript() async {
+    let subject = transcriber(
+      cloud: { _, _ in "  padded transcript \n" },
+      onDevice: { _ in nil })
+    let outcome = await subject.transcribe(speech(1), keywords: [])
+    XCTAssertEqual(outcome.transcript?.text, "padded transcript")
+  }
+}
+
+/// Collects what the injected cloud recognizer was handed, across the
+/// concurrency boundary the transcriber's closures cross.
+private actor KeywordBox {
+  private(set) var keywords: [String] = []
+
+  func record(_ keywords: [String]) {
+    self.keywords = keywords
+  }
+}
+
+/// Suspends until the surrounding task is cancelled, without consulting the clock.
+///
+/// The transcriber races two children and cancels the loser, so a test needs the
+/// loser never to finish on its own. `Task.sleep` would make that a property of
+/// the machine's timing rather than of the test, and would spend real seconds
+/// whenever a cancellation were missed. Yielding until cancelled is
+/// deterministic and costs a handful of cooperative hops.
+func suspendUntilCancelled() async {
+  while !Task.isCancelled {
+    await Task.yield()
   }
 }
