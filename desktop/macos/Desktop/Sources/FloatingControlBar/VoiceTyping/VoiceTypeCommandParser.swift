@@ -61,6 +61,42 @@ enum VoiceTypeCommandParser {
     return .rejected
   }
 
+  /// Applies a transcript correction to the dictated text only, never to the
+  /// wake word.
+  ///
+  /// The on-screen keyword corrector is run on every probe so names and jargon
+  /// visible on screen are spelled the way the screen spells them. Observed
+  /// live: with a window title containing "typ", it rewrote the wake word
+  /// itself — "Type, hello world" became "typ, hello world" — and the parser
+  /// then rejected every probe. The turn was never claimed, and the realtime
+  /// model, hearing "type …", spawned an agent to do the typing. So the wake
+  /// word is split off before correction and put back verbatim afterwards; a
+  /// transcript that is not (yet) a typing command is returned untouched.
+  static func correctingPayload(_ transcript: String, using correct: (String) -> String) -> String {
+    guard case .typing = decide(transcript) else { return transcript }
+    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    for wake in wakeWords.sorted(by: { $0.count > $1.count })
+    where trimmed.prefix(wake.count).lowercased() == wake {
+      let rest = trimmed.dropFirst(wake.count)
+      let payloadStart = rest.firstIndex(where: { !$0.unicodeScalars.allSatisfy(separators.contains) })
+      guard let payloadStart else { return transcript }
+      let prefix = String(trimmed[..<payloadStart])
+      let payload = String(trimmed[payloadStart...])
+      return prefix + correct(payload)
+    }
+    return transcript
+  }
+
+  /// Whether a transcript that is about to become the turn's immutable prefix
+  /// still reads as a dictation. A streaming recognizer's utterance is folded
+  /// into the committed text only if the result passes this: a first utterance
+  /// that lost the wake word would otherwise freeze a prefix the parser
+  /// rejects, after which nothing could be typed again.
+  static func stillDictates(_ transcript: String) -> Bool {
+    if case .typing = decide(transcript) { return true }
+    return false
+  }
+
   /// Dictation starts a sentence. The recognizer lowercases the first word
   /// because it heard it mid-utterance, right after the wake word, so it is
   /// restored here — and restored on every revision, so the planner's diff never

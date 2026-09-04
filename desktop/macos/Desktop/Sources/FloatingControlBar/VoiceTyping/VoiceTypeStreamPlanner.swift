@@ -30,7 +30,12 @@ struct VoiceTypeStreamPlanner {
   /// What has actually been emitted to the focused app so far this turn.
   private(set) var typed: String = ""
 
-  mutating func plan(for desired: String) -> Edit {
+  /// - Parameter rewritesFreely: lift the rewind limit. For text that will not
+  ///   move again — a finished utterance from the stronger streaming model, or
+  ///   the closing decode — a correction is worth its cost wherever it lands,
+  ///   and leaving the screen out of step with the record would make every
+  ///   later edit diff against text that is not there.
+  mutating func plan(for desired: String, rewritesFreely: Bool = false) -> Edit {
     guard desired != typed else { return .none }
 
     var shared = 0
@@ -45,7 +50,7 @@ struct VoiceTypeStreamPlanner {
     }
 
     let backspaces = typed.count - shared
-    if backspaces > Self.rewindLimit(typed) {
+    if !rewritesFreely, backspaces > Self.rewindLimit(typed) {
       // Too far back to correct. Keep what is on screen and append only what
       // the new transcript adds beyond it, so the tail keeps flowing instead of
       // the whole sentence being rewritten.

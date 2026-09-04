@@ -724,7 +724,6 @@ extension RealtimeHubController {
       turnTranscript = automationSelection.text
       providerTranscriptFinalized = automationSelection.isFinal
       lastInputTranscriptUpdateAt = Date()
-      PushToTalkManager.shared.updateVoiceTyping(hubTranscript: turnTranscript)
       return
     }
     if isFinal {
@@ -736,9 +735,6 @@ extension RealtimeHubController {
       turnTranscript += text
     }
     if !text.isEmpty { lastInputTranscriptUpdateAt = Date() }
-    // A "type <text>" turn dictates into the focused app as the words arrive.
-    // The manager owns that decision; this driver only reports what it heard.
-    PushToTalkManager.shared.updateVoiceTyping(hubTranscript: turnTranscript)
     // Don't surface Gemini's LIVE partial transcript on the bar: on a quiet/near-silent
     // hold it transcribes background noise into random words (the bar shows "…" on commit
     // instead). turnTranscript is still kept for the agent-warm heuristic and the final.

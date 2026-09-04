@@ -1,3 +1,5 @@
+import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -9,6 +11,18 @@ protocol KeystrokeSink: AnyObject {
   func deleteBackward(_ count: Int)
   /// Inserts `text` at the caret.
   func insert(_ text: String)
+  /// Whether the character just before the caret is part of a word — i.e. the
+  /// dictation is continuing a line, so it needs a separating space first.
+  /// False when there is no caret context to read.
+  func caretFollowsWordCharacter() -> Bool
+  /// Identifies where keystrokes would land right now — the frontmost
+  /// application. Nil when it cannot be read.
+  func focusTarget() -> String?
+}
+
+extension KeystrokeSink {
+  func caretFollowsWordCharacter() -> Bool { false }
+  func focusTarget() -> String? { nil }
 }
 
 /// Posts synthesized keyboard input to whichever application owns keyboard
@@ -34,6 +48,43 @@ final class CGEventKeystrokeSink: KeystrokeSink {
     for _ in 0..<count {
       post(virtualKey: Self.deleteKeyCode, unicode: nil)
     }
+  }
+
+  func focusTarget() -> String? {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+    return "\(app.processIdentifier):\(app.bundleIdentifier ?? "")"
+  }
+
+  /// Reads one character behind the caret through Accessibility. A second
+  /// dictation into the same line landed flush against the first ("voiceI
+  /// think") because nothing knew what the caret was sitting after. Only the
+  /// one character is fetched (`AXStringForRange`), never the document.
+  func caretFollowsWordCharacter() -> Bool {
+    var focusedRef: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(
+        AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+      let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
+    else { return false }
+    // swiftlint:disable:next force_cast
+    let element = focusedRef as! AXUIElement
+    var rangeRef: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+      let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID()
+    else { return false }
+    var selection = CFRange()
+    // swiftlint:disable:next force_cast
+    guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &selection), selection.location > 0 else { return false }
+    var previous = CFRange(location: selection.location - 1, length: 1)
+    guard let parameter = AXValueCreate(.cfRange, &previous) else { return false }
+    var textRef: CFTypeRef?
+    guard
+      AXUIElementCopyParameterizedAttributeValue(
+        element, kAXStringForRangeParameterizedAttribute as CFString, parameter, &textRef) == .success,
+      let text = textRef as? String, let character = text.last
+    else { return false }
+    return !character.isWhitespace && !character.isNewline
   }
 
   func insert(_ text: String) {

@@ -38,6 +38,60 @@ enum VoiceTypeAudioTrim {
     }
   }
 
+  /// Bytes of `pcm16k` that lie in 20 ms windows at speech level — how much
+  /// of a buffer is actually voice, as opposed to the pauses around it.
+  static func speechBytes(in pcm16k: Data) -> Int {
+    let sampleCount = pcm16k.count / 2
+    guard sampleCount >= windowSamples else { return 0 }
+    return pcm16k.withUnsafeBytes { raw -> Int in
+      let samples = raw.bindMemory(to: Int16.self)
+      var loudWindows = 0
+      var start = 0
+      while start + windowSamples <= sampleCount {
+        var sumSquares = 0.0
+        for index in start..<(start + windowSamples) {
+          let value = Double(Int16(littleEndian: samples[index]))
+          sumSquares += value * value
+        }
+        if (sumSquares / Double(windowSamples)).squareRoot() >= speechRMSThreshold { loudWindows += 1 }
+        start += windowSamples
+      }
+      return loudWindows * windowSamples * 2
+    }
+  }
+
+  /// The first quiet 20 ms window at or after `offset`, as a byte offset, if
+  /// one begins within `lookaheadSeconds`.
+  ///
+  /// Used to move a commit seam onto a pause. A streaming recognizer's
+  /// utterance `end` can land a few tens of milliseconds before the word it
+  /// closes has finished sounding; cutting there hands the next window the
+  /// word's last syllable, which it spells as a word of its own ("thinking" →
+  /// "thinking ng"). Sliding the seam to the next quiet window makes the cut
+  /// where a local commit would have made it.
+  static func quietBoundary(in pcm16k: Data, from offset: Int, lookaheadSeconds: Double = 0.6) -> Int? {
+    let sampleCount = pcm16k.count / 2
+    let startSample = max(0, min(offset / 2, sampleCount))
+    let lastStart = min(sampleCount - windowSamples, startSample + Int(lookaheadSeconds * 16_000))
+    guard lastStart >= startSample else { return nil }
+    return pcm16k.withUnsafeBytes { raw -> Int? in
+      let samples = raw.bindMemory(to: Int16.self)
+      var start = startSample
+      while start <= lastStart {
+        var sumSquares = 0.0
+        for index in start..<(start + windowSamples) {
+          let value = Double(Int16(littleEndian: samples[index]))
+          sumSquares += value * value
+        }
+        if (sumSquares / Double(windowSamples)).squareRoot() < speechRMSThreshold {
+          return start * 2
+        }
+        start += windowSamples
+      }
+      return nil
+    }
+  }
+
   /// - Parameter pcm16k: raw s16le 16 kHz mono.
   /// - Returns: the buffer from just before the first speech onward, or empty
   ///   when the whole buffer is quiet.
@@ -57,7 +111,10 @@ enum VoiceTypeAudioTrim {
         }
         if (sumSquares / Double(windowSamples)).squareRoot() >= speechRMSThreshold {
           let firstSample = max(0, start - preRollSamples)
-          return pcm16k.subdata(in: (firstSample * 2)..<pcm16k.count)
+          // Relative to `startIndex`: a `Data` produced by a slice does not
+          // start at zero, and an absolute range would trap.
+          let lower = pcm16k.startIndex + firstSample * 2
+          return pcm16k.subdata(in: lower..<pcm16k.endIndex)
         }
         window += 1
       }

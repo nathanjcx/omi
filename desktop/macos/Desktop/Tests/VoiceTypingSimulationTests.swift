@@ -67,7 +67,9 @@ final class VoiceTypingSimulationTests: XCTestCase {
     trusted: Bool = true,
     nilProbeEvery: Int = 0,
     probesStartAtWord: Int = 0,
-    window seededWindow: VoiceTypeDecodeWindow = VoiceTypeDecodeWindow()
+    window seededWindow: VoiceTypeDecodeWindow = VoiceTypeDecodeWindow(),
+    streamCommitsPauses: Bool = false,
+    streamText: (String) -> String = { $0 }
   ) -> Outcome {
     let sink = RecordingSink()
     let session = VoiceTypeSession(sink: sink, isAccessibilityTrusted: { trusted })
@@ -114,7 +116,24 @@ final class VoiceTypingSimulationTests: XCTestCase {
         let full = window.transcript(tail: tail)
         let stable = tail == lastTail
         lastTail = tail
-        if window.commitIfReady(tail: tail, endsQuiet: isPauseProbe, tailIsStable: stable) {
+        // With the backend stream healthy the manager gives it first claim on
+        // each pause: the stream's finished utterance for exactly this window
+        // lands a beat after the pause begins, before the local decode's longer
+        // quiet requirement is met.
+        if streamCommitsPauses, isPauseProbe, probe == 1 {
+          let utterance = streamText(visible.joined(separator: " "))
+          let outcome = window.adoptStreamFinal(
+            text: utterance, startByte: window.consumedBytes, endByte: window.appendedBytes)
+          XCTAssertEqual(outcome, .adopted, "a pause the stream reaches first is the stream's to commit")
+          commits += 1
+          lastTail = ""
+          committedWords = index + 1
+          session.update(transcript: window.transcript(tail: ""), isSettled: true)
+          continue
+        }
+        if window.commitIfReady(
+          tail: tail, endsQuiet: isPauseProbe && !streamCommitsPauses, tailIsStable: stable)
+        {
           commits += 1
           lastTail = ""
           // Every word the window decoded is now frozen.
@@ -216,6 +235,42 @@ final class VoiceTypingSimulationTests: XCTestCase {
     let outcome = runHold(words: words, pausesAfter: [])
     XCTAssertEqual(outcome.typed, expectedTyped(words))
     XCTAssertLessThanOrEqual(outcome.peakDecodeBytes, VoiceTypeDecodeWindow.maxBytes)
+  }
+
+  // MARK: - The backend stream commits, the local decode types the edge
+
+  func testAStreamThatCommitsEveryPauseKeepsTypingForTheWholeHold() {
+    // The live "timeout": after the stream's first utterance the dictation
+    // stopped. Every later utterance is a delta without the wake word, and
+    // replacing the transcript with it left nothing the parser would type.
+    // Committing each utterance by position instead keeps the hold going.
+    var words = ["Type"]
+    for index in 0..<300 { words.append("word\(index)") }
+    let pauses = Set(stride(from: 12, to: 300, by: 12))
+    let outcome = runHold(words: words, pausesAfter: pauses, streamCommitsPauses: true)
+
+    XCTAssertTrue(outcome.claimed)
+    XCTAssertEqual(outcome.typed, expectedTyped(words))
+    XCTAssertGreaterThan(outcome.commits, 20, "the stream must keep committing")
+    XCTAssertLessThanOrEqual(outcome.peakDecodeBytes, VoiceTypeDecodeWindow.maxBytes)
+  }
+
+  func testTheStreamsSpellingWinsForTheStretchesItCommits() {
+    // The local decode types "wrd7"; the stream's utterance for that stretch
+    // says "word7" — the screen settles to the stream's version and the next
+    // stretch carries on after it.
+    var words = ["Type"]
+    for index in 0..<40 { words.append("wrd\(index)") }
+    let pauses = Set(stride(from: 8, to: 40, by: 8))
+    let outcome = runHold(
+      words: words, pausesAfter: pauses, streamCommitsPauses: true,
+      streamText: { $0.replacingOccurrences(of: "wrd", with: "word") })
+    let expected = expectedTyped(words.map { $0.replacingOccurrences(of: "wrd", with: "word") })
+    // The tail after the last stream commit is still the local decode.
+    XCTAssertTrue(outcome.typed.hasPrefix("Word0 word1"), outcome.typed)
+    XCTAssertEqual(
+      outcome.typed.split(separator: " ").count, expected.split(separator: " ").count,
+      "no stretch is duplicated or lost at a seam")
   }
 
   // MARK: - Difficult content

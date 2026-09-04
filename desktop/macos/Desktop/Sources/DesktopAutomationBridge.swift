@@ -1464,16 +1464,22 @@ final class DesktopAutomationActionRegistry {
     // routing decision, realtime admission, warm buffering, and replay seam.
     // Unlike `ptt_test_turn`, it does not bypass PushToTalkManager; unlike a
     // physical test, it needs neither microphone permission nor a device.
+    // `pace_ms` spaces the 100 ms chunks in wall time (pass 100 for a real-time
+    // hold), which is what lets the voice-typing probes, the stream's utterance
+    // cadence, and the hub's warm deadline run on the timeline a physical hold
+    // has. `settle_ms` waits after release for the closing flush to land.
     register(
       name: "ptt_manager_turn",
       summary:
         "Inject a PCM16/16k mono hold through PushToTalkManager and realtime admission; returns lifecycle diagnostics",
-      params: ["pcm"]
+      params: ["pcm", "pace_ms", "settle_ms"]
     ) { params in
       guard let path = params["pcm"],
         let pcm16k = try? Data(contentsOf: URL(fileURLWithPath: path)),
         !pcm16k.isEmpty
       else { return ["error": "missing or unreadable 'pcm' file (expected raw s16le 16k mono)"] }
+      let paceMs = UInt64(params["pace_ms"] ?? "") ?? 0
+      let settleMs = UInt64(params["settle_ms"] ?? "") ?? 0
 
       var result = PushToTalkManager.shared.beginRealtimePushToTalkForAutomation()
       guard result["listening"] == "true" else { return result }
@@ -1486,11 +1492,16 @@ final class DesktopAutomationActionRegistry {
           injected += end - offset
         }
         offset = end
+        if paceMs > 0 { try? await Task.sleep(nanoseconds: paceMs * 1_000_000) }
       }
       let stopped = PushToTalkManager.shared.endPushToTalkForAutomation()
+      if settleMs > 0 { try? await Task.sleep(nanoseconds: settleMs * 1_000_000) }
       result["injected_bytes"] = "\(injected)"
       result["finalized"] = stopped["finalized"] ?? "false"
       for (key, value) in RealtimeHubController.shared.automationPTTDiagnostics() {
+        result[key] = value
+      }
+      for (key, value) in PushToTalkManager.shared.voiceTypingAutomationDiagnostics() {
         result[key] = value
       }
       return result

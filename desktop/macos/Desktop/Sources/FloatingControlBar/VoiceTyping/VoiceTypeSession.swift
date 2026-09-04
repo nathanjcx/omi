@@ -39,6 +39,18 @@ final class VoiceTypeSession {
   }
 
   private var latch: Latch = .none
+  /// Typed ahead of the first word when the caret was sitting right after a
+  /// word, so a dictation that continues a line does not run into it. Part of
+  /// what is on screen (the planner diffs against it) but not part of what the
+  /// turn dictated.
+  private var leadingSeparator = ""
+  /// Where the dictation was aimed when it armed. Keystrokes are posted only
+  /// while that is still the frontmost application; otherwise the turn pauses
+  /// and catches up when focus returns. Observed live: the user clicked the
+  /// Omi dock icon mid-hold and two stream commits rewrote text inside Omi's
+  /// own window instead of the document.
+  private var armedFocusTarget: String?
+  private var pausedForFocus = false
   /// Set while a turn that has already been closed is still flushing its last
   /// words. Teardown must not reset the planner underneath that flush, or the
   /// diff would be computed against an empty buffer and retype the whole
@@ -56,6 +68,11 @@ final class VoiceTypeSession {
   /// Characters delivered to the focused app so far this turn.
   var typedCount: Int { planner.typed.count }
 
+  /// The dictated text on screen, without the separator typed ahead of it.
+  private var dictatedText: String {
+    String(planner.typed.dropFirst(leadingSeparator.count))
+  }
+
   init(
     sink: KeystrokeSink = CGEventKeystrokeSink(),
     isAccessibilityTrusted: @escaping () -> Bool = { AXIsProcessTrusted() }
@@ -68,6 +85,9 @@ final class VoiceTypeSession {
     generation &+= 1
     isFlushing = false
     latch = .none
+    leadingSeparator = ""
+    armedFocusTarget = nil
+    pausedForFocus = false
     planner.reset()
     stabilizer.reset()
   }
@@ -75,8 +95,10 @@ final class VoiceTypeSession {
   /// Feeds the whole utterance heard so far. Returns whether this turn belongs
   /// to voice typing.
   ///
-  /// - Parameter isSettled: true only for the closing transcript, which is not
-  ///   going to move again and so is typed in full rather than held back a word.
+  /// - Parameter isSettled: true for text that is not going to move again — the
+  ///   closing transcript, or a stretch a streaming recognizer has finished. It
+  ///   is typed in full rather than held back a word, and it may correct what is
+  ///   already on screen however far back that reaches.
   @discardableResult
   func update(transcript: String, isSettled: Bool = false) -> Bool {
     guard latch != .blocked else { return false }
@@ -88,7 +110,7 @@ final class VoiceTypeSession {
       return claimsTurn
     }
     guard armIfNeeded() else { return false }
-    emit(payload)
+    emit(payload, rewritesFreely: isSettled)
     return true
   }
 
@@ -99,7 +121,7 @@ final class VoiceTypeSession {
     let claimed = update(transcript: transcript, isSettled: true)
     // Read before the reset below clears it: `typed` is the exact text that
     // reached the focused app, which is what the transcript should record.
-    let completion: Completion = claimed ? .typed(planner.typed) : .none
+    let completion: Completion = claimed ? .typed(dictatedText) : .none
     latch = .none
     planner.reset()
     stabilizer.reset()
@@ -132,7 +154,7 @@ final class VoiceTypeSession {
     if let finalTranscript {
       claimed = update(transcript: finalTranscript, isSettled: true) || claimed
     }
-    let completion: Completion = claimed ? .typed(planner.typed) : .none
+    let completion: Completion = claimed ? .typed(dictatedText) : .none
     latch = .none
     planner.reset()
     stabilizer.reset()
@@ -161,13 +183,39 @@ final class VoiceTypeSession {
       return false
     }
     latch = .typing
-    log("VoiceTypeSession: typing turn armed")
+    // Decided once, at arming, from where the caret is right now: the first
+    // word must not land flush against the word before it ("voiceI think").
+    leadingSeparator = sink.caretFollowsWordCharacter() ? " " : ""
+    armedFocusTarget = sink.focusTarget()
+    log("VoiceTypeSession: typing turn armed" + (leadingSeparator.isEmpty ? "" : " (continuing a line)"))
     return true
   }
 
-  private func emit(_ payload: String) {
-    let edit = planner.plan(for: payload)
+  private func emit(_ payload: String, rewritesFreely: Bool) {
+    // The separator goes in with the first word, never on its own: a bare
+    // wake word must leave nothing behind.
+    guard !payload.isEmpty else { return }
+    if let armed = armedFocusTarget, let current = sink.focusTarget(), current != armed {
+      if !pausedForFocus {
+        pausedForFocus = true
+        log("VoiceTypeSession: focus left the dictation target — typing paused until it returns")
+      }
+      return
+    }
+    if pausedForFocus {
+      pausedForFocus = false
+      log("VoiceTypeSession: focus returned — typing resumes")
+    }
+    let before = planner.typed.count
+    let edit = planner.plan(for: leadingSeparator + payload, rewritesFreely: rewritesFreely)
     guard !edit.isEmpty else { return }
+    if edit.backspaces >= 20 {
+      // Shape only, never text: a rewrite this large is either a correction
+      // the user will see as a flash or a planner/screen divergence.
+      log(
+        "VoiceTypeSession: large edit — typed=\(before) backspaces=\(edit.backspaces) "
+          + "insert=\(edit.insertion.count) settled=\(rewritesFreely)")
+    }
     sink.deleteBackward(edit.backspaces)
     sink.insert(edit.insertion)
   }
