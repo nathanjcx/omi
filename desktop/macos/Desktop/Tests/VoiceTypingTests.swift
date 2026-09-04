@@ -300,7 +300,7 @@ final class VoiceTypeDecodeWindowTests: XCTestCase {
   func testAShortWindowIsNotCommittedYet() {
     var w = VoiceTypeDecodeWindow()
     w.append(audio(seconds: 3))
-    XCTAssertFalse(w.commitIfReady(tail: "hello there", endsQuiet: true))
+    XCTAssertFalse(w.commitIfReady(tail: "hello there", endsQuiet: true, tailIsStable: true))
     XCTAssertFalse(w.hasCommitted)
     XCTAssertEqual(w.transcript(tail: "hello there"), "hello there")
   }
@@ -310,7 +310,7 @@ final class VoiceTypeDecodeWindowTests: XCTestCase {
     // being decoded — that is what keeps every probe cheap on a long hold.
     var w = VoiceTypeDecodeWindow()
     w.append(audio(seconds: 7))
-    XCTAssertTrue(w.commitIfReady(tail: "the first part", endsQuiet: true))
+    XCTAssertTrue(w.commitIfReady(tail: "the first part", endsQuiet: true, tailIsStable: true))
     XCTAssertEqual(w.pendingAudio.count, 0, "committed audio is dropped")
     XCTAssertEqual(
       w.transcript(tail: "and the rest"), "the first part and the rest",
@@ -322,14 +322,14 @@ final class VoiceTypeDecodeWindowTests: XCTestCase {
     // wrong. Past the target the window waits for a pause.
     var w = VoiceTypeDecodeWindow()
     w.append(audio(seconds: 7))
-    XCTAssertFalse(w.commitIfReady(tail: "still going", endsQuiet: false))
+    XCTAssertFalse(w.commitIfReady(tail: "still going", endsQuiet: false, tailIsStable: true))
     XCTAssertFalse(w.hasCommitted)
   }
 
   func testASpeakerWhoNeverPausesIsForcedAtTheHardLimit() {
     var w = VoiceTypeDecodeWindow()
     w.append(audio(seconds: 21))
-    XCTAssertTrue(w.commitIfReady(tail: "no breath at all", endsQuiet: false))
+    XCTAssertTrue(w.commitIfReady(tail: "no breath at all", endsQuiet: false, tailIsStable: false))
     XCTAssertEqual(w.pendingAudio.count, 0)
   }
 
@@ -337,7 +337,7 @@ final class VoiceTypeDecodeWindowTests: XCTestCase {
     var w = VoiceTypeDecodeWindow()
     for word in ["one", "two", "three"] {
       w.append(audio(seconds: 7))
-      XCTAssertTrue(w.commitIfReady(tail: word, endsQuiet: true))
+      XCTAssertTrue(w.commitIfReady(tail: word, endsQuiet: true, tailIsStable: true))
     }
     XCTAssertEqual(w.transcript(tail: "four"), "one two three four")
     XCTAssertEqual(w.pendingAudio.count, 0)
@@ -348,14 +348,14 @@ final class VoiceTypeDecodeWindowTests: XCTestCase {
     // that can never be revised.
     var w = VoiceTypeDecodeWindow()
     w.append(audio(seconds: 25))
-    XCTAssertFalse(w.commitIfReady(tail: "   ", endsQuiet: true))
+    XCTAssertFalse(w.commitIfReady(tail: "   ", endsQuiet: true, tailIsStable: true))
     XCTAssertFalse(w.hasCommitted)
   }
 
   func testResetForgetsTheTurn() {
     var w = VoiceTypeDecodeWindow()
     w.append(audio(seconds: 7))
-    _ = w.commitIfReady(tail: "previous turn", endsQuiet: true)
+    _ = w.commitIfReady(tail: "previous turn", endsQuiet: true, tailIsStable: true)
     w.reset()
     XCTAssertFalse(w.hasCommitted)
     XCTAssertEqual(w.pendingAudio.count, 0)

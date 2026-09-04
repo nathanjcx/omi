@@ -3042,6 +3042,8 @@ class PushToTalkManager: ObservableObject {
   private var voiceTypingLocalTranscript = ""
   /// Latest backend streaming decode for this turn.
   private var voiceTypingCloudTranscript = ""
+  /// Previous probe's decode of the current window, for stability checks.
+  private var voiceTypingLastProbeTail = ""
   /// Latest transcript the realtime hub has reported for this turn.
   private var voiceTypingHubTranscript = ""
   /// Set only when the streaming socket actually failed, so typing falls back
@@ -3089,6 +3091,7 @@ class PushToTalkManager: ObservableObject {
     voiceTypingLocalTranscript = ""
     voiceTypingCloudTranscript = ""
     voiceTypingHubTranscript = ""
+    voiceTypingLastProbeTail = ""
     voiceTypingCloudFailed = false
     voiceTypingCloudService?.stop(discardBufferedAudio: true)
     voiceTypingCloudService = nil
@@ -3158,8 +3161,13 @@ class PushToTalkManager: ObservableObject {
         // Once this stretch has been typed, commit it: its text stops being
         // revised and its audio is dropped, so the next probe decodes only what
         // has been said since. Prefers a pause so no word is cut in half.
+        // Stability is what makes a commit safe: the recognizer has stopped
+        // revising this window, so freezing it cannot freeze a half-heard word.
+        let stable = tail == self.voiceTypingLastProbeTail
+        self.voiceTypingLastProbeTail = tail
         let committed = self.voiceTypingWindow.commitIfReady(
-          tail: tail, endsQuiet: VoiceTypeAudioTrim.endsQuiet(audio))
+          tail: tail, endsQuiet: VoiceTypeAudioTrim.endsQuiet(audio), tailIsStable: stable)
+        if committed { self.voiceTypingLastProbeTail = "" }
         if committed {
           log(
             "PushToTalkManager: voice-typing committed "
