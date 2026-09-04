@@ -50,6 +50,15 @@ the turn.
   invented words, not silence.
 - A claimed hub turn is **cancelled, never committed**, so the model never
   answers a dictation out loud.
+- A finished turn reports a `Completion` carrying the text that actually reached
+  the focused app — not the raw utterance, which still holds the "type" wake
+  word. `PushToTalkManager` journals it as `Typed: <text>` through the ordinary
+  `recordExchange` on the realtime voice surface, so a dictation persists and
+  enters conversation context exactly like a spoken question and the next turn
+  can refer back to it. The continuity key is derived from the turn, so a
+  retried flush cannot write a second copy. Because the closing decode lands
+  after key-up, the record comes from the flush, not from what the probes had
+  delivered when the key came up.
 
 Guards: `Tests/VoiceTypingTests.swift`.
 

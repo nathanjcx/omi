@@ -1812,8 +1812,9 @@ class PushToTalkManager: ObservableObject {
     // "Type <text>" dictates into whatever app owns the caret. The turn is
     // complete once the last keystroke lands: it asks Omi nothing, so no query
     // is dispatched and no response is awaited.
-    if voiceTypeSession.finish(transcript: query) {
+    if case .typed(let typed) = voiceTypeSession.finish(transcript: query) {
       log("PushToTalkManager: voice typing consumed turn (\(query.count) chars)")
+      recordVoiceTypingExchange(utterance: query, typed: typed, turnID: turnID)
       voiceTurnCoordinator.publish(.cancel(turnID: turnID, reason: .cancelled))
       return
     }
@@ -3034,9 +3035,41 @@ class PushToTalkManager: ObservableObject {
     // last probe stopped a beat before the user did.
     Task { @MainActor [weak self] in
       let text = await PTTLanguageIdentifier.shared.transcribe(pcm16k: audio)
-      self?.voiceTypeSession.endFlush(token: flushToken, finalTranscript: text)
+      guard let self else { return }
+      let completion = self.voiceTypeSession.endFlush(token: flushToken, finalTranscript: text)
+      if case .typed(let typed) = completion {
+        self.recordVoiceTypingExchange(utterance: text ?? typed, typed: typed, turnID: turnID)
+      }
     }
     return true
+  }
+
+  /// Puts a dictated turn in the chat transcript as `Typed: <text>`.
+  ///
+  /// A dictation is still something the user said to Omi, so it belongs in the
+  /// same journal as a spoken question: without it the next turn cannot refer
+  /// back to what was just written. This goes through the ordinary journal
+  /// exchange the realtime voice surface already uses, so the record persists
+  /// and enters conversation context exactly like every other voice turn. The
+  /// continuity key is derived from the turn, so a retried flush cannot write a
+  /// second copy.
+  private func recordVoiceTypingExchange(
+    utterance: String, typed: String, turnID: VoiceTurnID
+  ) {
+    let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    let manager = FloatingControlBarManager.shared
+    Task { @MainActor in
+      let recorded = await manager.recordExchange(
+        surface: manager.realtimeVoiceSurfaceReference(),
+        userText: utterance,
+        assistantText: "Typed: \(trimmed)",
+        origin: "voice_typing",
+        continuityKey: "voice-typing-\(turnID)")
+      if !recorded {
+        log("PushToTalkManager: voice typing exchange not journaled")
+      }
+    }
   }
 
   private func handleTranscriptSegments(_ segments: [TranscriptionService.BackendSegment]) {

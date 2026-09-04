@@ -30,6 +30,14 @@ final class VoiceTypeSession {
     case blocked
   }
 
+  /// What a finished turn delivered. The caller journals `typed` so the dictated
+  /// sentence joins the conversation history; a turn that never dictated has
+  /// nothing to record.
+  enum Completion: Equatable {
+    case none
+    case typed(String)
+  }
+
   private var latch: Latch = .none
   /// Set while a turn that has already been closed is still flushing its last
   /// words. Teardown must not reset the planner underneath that flush, or the
@@ -85,14 +93,17 @@ final class VoiceTypeSession {
   }
 
   /// Feeds the final transcript and flushes any text the live stream never
-  /// delivered. Returns whether the turn was consumed by typing.
+  /// delivered. Returns what the turn dictated, if anything.
   @discardableResult
-  func finish(transcript: String) -> Bool {
+  func finish(transcript: String) -> Completion {
     let claimed = update(transcript: transcript, isSettled: true)
+    // Read before the reset below clears it: `typed` is the exact text that
+    // reached the focused app, which is what the transcript should record.
+    let completion: Completion = claimed ? .typed(planner.typed) : .none
     latch = .none
     planner.reset()
     stabilizer.reset()
-    return claimed
+    return completion
   }
 
   /// Opens the post-commit flush window. Returns the token `endFlush` must
@@ -103,16 +114,22 @@ final class VoiceTypeSession {
   }
 
   /// Types whatever the closing decode heard beyond what the live probes already
-  /// delivered, then ends the turn.
-  func endFlush(token: Int, finalTranscript: String?) {
-    guard token == generation, isFlushing else { return }
+  /// delivered, then ends the turn. Returns what the turn dictated, so the
+  /// caller journals the completed sentence rather than the partial one the
+  /// probes had delivered when the key came up.
+  @discardableResult
+  func endFlush(token: Int, finalTranscript: String?) -> Completion {
+    guard token == generation, isFlushing else { return .none }
     isFlushing = false
+    var claimed = claimsTurn
     if let finalTranscript {
-      _ = update(transcript: finalTranscript, isSettled: true)
+      claimed = update(transcript: finalTranscript, isSettled: true) || claimed
     }
+    let completion: Completion = claimed ? .typed(planner.typed) : .none
     latch = .none
     planner.reset()
     stabilizer.reset()
+    return completion
   }
 
   /// Ends the turn without typing anything further (cancel, error, teardown).

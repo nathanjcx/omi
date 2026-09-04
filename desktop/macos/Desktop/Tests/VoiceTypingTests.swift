@@ -120,7 +120,7 @@ final class VoiceTypeSessionTests: XCTestCase {
     XCTAssertFalse(session.update(transcript: "Type hello"))
     XCTAssertTrue(session.update(transcript: "Type hello there"))
     XCTAssertEqual(sink.typed, "Hello", "the moving last word waits one probe")
-    XCTAssertTrue(session.finish(transcript: "Type hello there"))
+    XCTAssertEqual(session.finish(transcript: "Type hello there"), .typed("Hello there"))
     XCTAssertEqual(sink.typed, "Hello there")
     XCTAssertEqual(sink.deletions, [], "a smooth turn never rewrites what it typed")
   }
@@ -129,7 +129,7 @@ final class VoiceTypeSessionTests: XCTestCase {
     let (session, sink) = makeSession()
     session.begin()
     XCTAssertFalse(session.update(transcript: "what is on my calendar"))
-    XCTAssertFalse(session.finish(transcript: "what is on my calendar"))
+    XCTAssertEqual(session.finish(transcript: "what is on my calendar"), .none)
     XCTAssertEqual(sink.typed, "")
   }
 
@@ -139,7 +139,7 @@ final class VoiceTypeSessionTests: XCTestCase {
     session.update(transcript: "Type send it to nate")
     session.update(transcript: "Type send it to nate")
     // The contextual corrector fixes the name only on the final transcript.
-    XCTAssertTrue(session.finish(transcript: "Type send it to Nathan"))
+    XCTAssertEqual(session.finish(transcript: "Type send it to Nathan"), .typed("Send it to Nathan"))
     XCTAssertEqual(sink.typed, "Send it to Nathan")
   }
 
@@ -150,7 +150,9 @@ final class VoiceTypeSessionTests: XCTestCase {
       session.update(transcript: "Type what is on my calendar"),
       "the first decode of a turn has nothing to agree with yet")
     XCTAssertTrue(session.update(transcript: "Type what is on my calendar"))
-    XCTAssertTrue(session.finish(transcript: "Type what is on my calendar"))
+    XCTAssertEqual(
+      session.finish(transcript: "Type what is on my calendar"),
+      .typed("What is on my calendar"))
     XCTAssertEqual(sink.typed, "What is on my calendar")
   }
 
@@ -160,7 +162,7 @@ final class VoiceTypeSessionTests: XCTestCase {
     let (session, sink) = makeSession(trusted: false)
     session.begin()
     XCTAssertFalse(session.update(transcript: "Type hello"))
-    XCTAssertFalse(session.finish(transcript: "Type hello"))
+    XCTAssertEqual(session.finish(transcript: "Type hello"), .none)
     XCTAssertEqual(sink.typed, "")
   }
 
@@ -174,7 +176,7 @@ final class VoiceTypeSessionTests: XCTestCase {
     XCTAssertFalse(session.update(transcript: "So"))
     XCTAssertFalse(session.update(transcript: "Ty"))
     XCTAssertFalse(session.update(transcript: "Type hello"))
-    XCTAssertTrue(session.finish(transcript: "Type hello there"))
+    XCTAssertEqual(session.finish(transcript: "Type hello there"), .typed("Hello there"))
     XCTAssertEqual(sink.typed, "Hello there")
   }
 
@@ -189,8 +191,50 @@ final class VoiceTypeSessionTests: XCTestCase {
     XCTAssertEqual(sink.typed, "FirstSecond")
     XCTAssertEqual(sink.deletions, [])
   }
-}
 
+  func testCompletionCarriesExactlyWhatReachedTheFocusedApp() {
+    // The chat record says "Typed: <text>", so the completion has to report the
+    // text that actually landed — not the raw utterance, which still carries the
+    // "Type" wake word the user never meant to dictate.
+    let (session, sink) = makeSession()
+    session.begin()
+    session.update(transcript: "Type hello there")
+    let completion = session.finish(transcript: "Type hello there")
+    XCTAssertEqual(completion, .typed("Hello there"))
+    XCTAssertEqual(completion, .typed(sink.typed))
+  }
+
+  func testAFlushedTurnReportsTheWholeSentenceNotJustTheProbedPrefix() {
+    // The closing decode arrives after the key is up. Journaling what the probes
+    // had delivered at key-up would record a truncated sentence.
+    let (session, _) = makeSession()
+    session.begin()
+    session.update(transcript: "Type hello")
+    session.update(transcript: "Type hello")
+    let token = session.beginFlush()
+    XCTAssertEqual(
+      session.endFlush(token: token, finalTranscript: "Type hello there friend"),
+      .typed("Hello there friend"))
+  }
+
+  func testATurnThatNeverDictatedReportsNothingToJournal() {
+    let (session, _) = makeSession()
+    session.begin()
+    session.update(transcript: "what is on my calendar")
+    let token = session.beginFlush()
+    XCTAssertEqual(
+      session.endFlush(token: token, finalTranscript: "what is on my calendar"), .none)
+  }
+
+  func testAStaleFlushReportsNothingSoItCannotJournalIntoTheNextTurn() {
+    let (session, _) = makeSession()
+    session.begin()
+    session.update(transcript: "Type first")
+    let stale = session.beginFlush()
+    session.begin()
+    XCTAssertEqual(session.endFlush(token: stale, finalTranscript: "Type first"), .none)
+  }
+}
 
 final class VoiceTypeAudioTrimTests: XCTestCase {
 
@@ -221,7 +265,6 @@ final class VoiceTypeAudioTrimTests: XCTestCase {
     XCTAssertEqual(VoiceTypeAudioTrim.trimmingLeadingSilence(pcm(speech)).count, 32_000)
   }
 }
-
 
 final class VoiceTypeStabilizerTests: XCTestCase {
 
