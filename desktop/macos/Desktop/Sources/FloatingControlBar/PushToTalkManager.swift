@@ -3060,11 +3060,15 @@ class PushToTalkManager: ObservableObject {
     guard !trimmed.isEmpty else { return }
     let manager = FloatingControlBarManager.shared
     Task { @MainActor in
+      // `realtime_voice`, not a voice-typing origin of its own: the journal
+      // runtime accepts a closed set of origins (agent/src/index.ts), and a
+      // dictation is a realtime voice turn — one that types instead of asking.
+      // The "Typed:" prefix is what distinguishes it in the transcript.
       let recorded = await manager.recordExchange(
         surface: manager.realtimeVoiceSurfaceReference(),
         userText: utterance,
         assistantText: "Typed: \(trimmed)",
-        origin: "voice_typing",
+        origin: "realtime_voice",
         continuityKey: "voice-typing-\(turnID)")
       if !recorded {
         log("PushToTalkManager: voice typing exchange not journaled")
