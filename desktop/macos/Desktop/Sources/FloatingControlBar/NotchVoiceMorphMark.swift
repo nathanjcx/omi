@@ -135,7 +135,7 @@ enum NotchVoiceMorphGeometry {
   /// How long the dots take to ease from white to red once a hold is
   /// recognised as a dictation. Long enough to read as a deliberate change,
   /// short enough to land before the next word.
-  static let dictationTintDuration: TimeInterval = 0.45
+  static let dictationTintDuration: TimeInterval = 0.28
 
   /// Red the dots settle on. Warm and bright so it holds up against the
   /// notch's black glass at a 3.8pt dot.

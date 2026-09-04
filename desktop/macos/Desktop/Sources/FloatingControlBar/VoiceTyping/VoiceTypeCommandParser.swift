@@ -67,6 +67,12 @@ enum VoiceTypeCommandParser {
     "typed", "types", "typing", "tie", "tied", "tight", "tape", "typo", "tap", "two",
   ]
 
+  /// The subset of mishearings safe to claim a dictation from *mid-hold*, before
+  /// the whole utterance is known. Excludes the ones that are also ordinary
+  /// words ("typing", "types", "typo") — "typing is broken" is a real question,
+  /// not a dictation — so an early claim on them cannot hijack a spoken query.
+  private static let probeClaimMishearings = ["typed", "tie", "tied", "tight", "tape", "tap", "two"]
+
   /// Whether the opening of a still-growing transcript plausibly begins a
   /// dictation — the documented wake word, or a close mishearing of it.
   ///
@@ -84,8 +90,21 @@ enum VoiceTypeCommandParser {
     let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return false }
     let lowered = trimmed.lowercased()
-    for token in (wakeWords + wakeWordMishearings).sorted(by: { $0.count > $1.count })
-    where lowered.hasPrefix(token) {
+
+    // The exact wake word followed by a separator — a pause ("Type.") or a
+    // space ("Type hello") — claims the instant it is heard, before the next
+    // word, so the notch turns red immediately. The separator is what tells
+    // the wake word apart from a longer word that merely starts with it
+    // ("typescript" has no separator after "type", so it never claims).
+    for token in wakeWords.sorted(by: { $0.count > $1.count }) where lowered.hasPrefix(token) {
+      let rest = lowered.dropFirst(token.count)
+      if let first = rest.unicodeScalars.first, separators.contains(first) { return true }
+    }
+
+    // A close mishearing of "type" claims only with a following word — more
+    // evidence, because the on-device model produces these from a short clip
+    // and some are near ordinary words.
+    for token in probeClaimMishearings.sorted(by: { $0.count > $1.count }) where lowered.hasPrefix(token) {
       let rest = trimmed.dropFirst(token.count)
       guard let first = rest.unicodeScalars.first, separators.contains(first) else { continue }
       let payload = rest.drop(while: { $0.unicodeScalars.allSatisfy(separators.contains) })

@@ -72,12 +72,33 @@ final class VoiceTypeCommandParserTests: XCTestCase {
     }
   }
 
-  func testOpensLikeDictationDoesNotClaimAnOrdinaryQuestionOrBareToken() {
-    for opening in ["what is on my calendar", "tell me a joke", "Two", "Tie", "hello there"] {
+  func testAWakeWordFollowedByAPauseClaimsInstantlyWithoutANextWord() {
+    // "Type." the instant it is heard, before the next word, so the dots turn
+    // red immediately. A separator (pause or space) after the wake word is the
+    // signal.
+    // The exact wake word claims on the pause alone.
+    for opening in ["Type.", "Type,", "type: hello"] {
+      XCTAssertTrue(VoiceTypeCommandParser.opensLikeDictation(opening), "\(opening) should claim instantly")
+    }
+    // A mishearing still needs the next word (it is weaker evidence).
+    XCTAssertFalse(VoiceTypeCommandParser.opensLikeDictation("Two."))
+    XCTAssertTrue(VoiceTypeCommandParser.opensLikeDictation("Two. Okay"))
+  }
+
+  func testOpensLikeDictationDoesNotClaimAnOrdinaryQuestionOrPrefixWord() {
+    // No separator after the wake token → a longer word that merely starts
+    // with it, never a claim.
+    for opening in [
+      "what is on my calendar", "tell me a joke", "typescript generics", "typing is broken", "hello there",
+    ] {
       XCTAssertFalse(VoiceTypeCommandParser.opensLikeDictation(opening), "\(opening) must not open like a dictation")
     }
-    // The real wake word still opens it.
+    // A bare token still growing (no separator yet) waits.
+    XCTAssertFalse(VoiceTypeCommandParser.opensLikeDictation("Type"))
     XCTAssertTrue(VoiceTypeCommandParser.opensLikeDictation("Type hello"))
+    // Real words that happen to be mishearings never claim mid-hold.
+    XCTAssertFalse(VoiceTypeCommandParser.opensLikeDictation("types of birds"))
+    XCTAssertFalse(VoiceTypeCommandParser.opensLikeDictation("typo in the file"))
   }
 
   func testAClaimedTurnWithNoWakeWordAtAllKeepsEveryWord() {
@@ -547,7 +568,7 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
     // several quick retries and then no more.
     XCTAssertEqual(schedule.probesTaken, VoiceTypeWakeWordProbeSchedule.voicedByteThresholds.count)
     let firstProbeVoicedSeconds = Double(probeChunks[0] * 3_200) / 32_000
-    XCTAssertLessThan(firstProbeVoicedSeconds, 0.8)
+    XCTAssertLessThan(firstProbeVoicedSeconds, 0.55)
   }
 
   func testRealMicrophoneChunksSmallerThanAWindowStillScheduleProbes() {
@@ -563,14 +584,14 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
     // chunks; all the configured retries fire and then no more.
     XCTAssertEqual(probeChunks.count, VoiceTypeWakeWordProbeSchedule.voicedByteThresholds.count)
     let firstProbeVoicedSeconds = Double(probeChunks[0] * 342) / 32_000
-    XCTAssertLessThan(firstProbeVoicedSeconds, 0.9)
+    XCTAssertLessThan(firstProbeVoicedSeconds, 0.6)
   }
 
   func testSilenceBetweenWordsDoesNotCountTowardsTheThreshold() {
     var schedule = VoiceTypeWakeWordProbeSchedule()
     var probed = false
-    // Below the first threshold (0.7 s ≈ 7 voiced chunks), then a long pause.
-    for _ in 0..<5 { probed = schedule.observe(chunk: Self.chunk(voiced: true)) || probed }
+    // Below the first threshold (0.45 s ≈ 5 voiced chunks), then a long pause.
+    for _ in 0..<3 { probed = schedule.observe(chunk: Self.chunk(voiced: true)) || probed }
     for _ in 0..<50 { probed = schedule.observe(chunk: Self.chunk(voiced: false)) || probed }
     XCTAssertFalse(probed, "silence must not push voiced audio over the threshold")
     // Enough further voice does cross it.
@@ -581,8 +602,8 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
 
   func testADecisionEndsProbingAndResetStartsOver() {
     var schedule = VoiceTypeWakeWordProbeSchedule()
-    // Just past the first threshold (0.7 s ≈ 7 voiced chunks), before the next.
-    for _ in 0..<7 { _ = schedule.observe(chunk: Self.chunk(voiced: true)) }
+    // Just past the first threshold (0.45 s ≈ 5 voiced chunks), before the next.
+    for _ in 0..<5 { _ = schedule.observe(chunk: Self.chunk(voiced: true)) }
     XCTAssertEqual(schedule.probesTaken, 1)
     schedule.decide()
     for _ in 0..<50 {

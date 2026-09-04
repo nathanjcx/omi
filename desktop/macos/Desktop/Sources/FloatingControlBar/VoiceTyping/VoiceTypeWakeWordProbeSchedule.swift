@@ -22,7 +22,7 @@ struct VoiceTypeWakeWordProbeSchedule: Equatable {
   /// on-device model misheard the opening, spaced so a claim usually lands
   /// under a second of speech.
   static let voicedByteThresholds = [
-    Int(0.7 * 32_000), Int(1.1 * 32_000), Int(1.7 * 32_000), Int(2.6 * 32_000),
+    Int(0.45 * 32_000), Int(0.7 * 32_000), Int(1.0 * 32_000), Int(1.5 * 32_000), Int(2.3 * 32_000),
   ]
   /// The most audio a probe decodes. The wake word opens the utterance; the
   /// rest of a long hold is not needed to find it.
