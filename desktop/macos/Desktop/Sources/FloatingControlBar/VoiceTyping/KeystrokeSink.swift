@@ -66,16 +66,16 @@ final class CGEventKeystrokeSink: KeystrokeSink {
         AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
       let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
     else { return false }
-    // swiftlint:disable:next force_cast
-    let element = focusedRef as! AXUIElement
+    // Type-checked above; an unsafe downcast avoids a force cast on a CF handle.
+    let element = unsafeDowncast(focusedRef, to: AXUIElement.self)
     var rangeRef: CFTypeRef?
     guard
       AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
       let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID()
     else { return false }
     var selection = CFRange()
-    // swiftlint:disable:next force_cast
-    guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &selection), selection.location > 0 else { return false }
+    let rangeValue = unsafeDowncast(rangeRef, to: AXValue.self)
+    guard AXValueGetValue(rangeValue, .cfRange, &selection), selection.location > 0 else { return false }
     var previous = CFRange(location: selection.location - 1, length: 1)
     guard let parameter = AXValueCreate(.cfRange, &previous) else { return false }
     var textRef: CFTypeRef?
