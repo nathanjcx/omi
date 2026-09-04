@@ -1465,9 +1465,9 @@ final class DesktopAutomationActionRegistry {
     // Unlike `ptt_test_turn`, it does not bypass PushToTalkManager; unlike a
     // physical test, it needs neither microphone permission nor a device.
     // `pace_ms` spaces the 100 ms chunks in wall time (pass 100 for a real-time
-    // hold), which is what lets the voice-typing probes, the stream's utterance
-    // cadence, and the hub's warm deadline run on the timeline a physical hold
-    // has. `settle_ms` waits after release for the closing flush to land.
+    // hold), which is what lets the wake-word probes and the hub's warm
+    // deadline run on the timeline a physical hold has. `settle_ms` waits after
+    // release for the closing transcription, polish, and paste to land.
     register(
       name: "ptt_manager_turn",
       summary:
@@ -1505,6 +1505,24 @@ final class DesktopAutomationActionRegistry {
         result[key] = value
       }
       return result
+    }
+
+    // The dictation pipeline without a voice turn: transcribe a recording the
+    // way a key-up does (backend, then on-device; on-device only with
+    // network=false), clean it up, and paste it into the frontmost app. Lets a
+    // harness verify the paste and the fallback order with no microphone and,
+    // with network=false, no sign-in.
+    register(
+      name: "voice_typing_dictate",
+      summary: "Run a PCM16/16k recording through the dictation pipeline and paste the result into the frontmost app",
+      params: ["pcm", "network"]
+    ) { params in
+      guard let path = params["pcm"],
+        let pcm16k = try? Data(contentsOf: URL(fileURLWithPath: path)),
+        !pcm16k.isEmpty
+      else { return ["error": "missing or unreadable 'pcm' file (expected raw s16le 16k mono)"] }
+      let allowNetwork = (params["network"] ?? "true").lowercased() != "false"
+      return await PushToTalkManager.shared.dictateForAutomation(pcm16k: pcm16k, allowNetwork: allowNetwork)
     }
 
     register(

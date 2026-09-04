@@ -18,137 +18,96 @@ double-tap shortcut already drives: first click locks, next click finalizes.
 ## Voice typing ("type <text>")
 
 A push-to-talk turn that opens with the spoken word "type" dictates into
-whichever app owns the caret instead of asking Omi. `VoiceTypeSession` owns that
-decision and nothing else does; `PushToTalkManager` asks it on every transcript
-change and suppresses the chat dispatch (or the hub commit) only while it claims
-the turn.
+whichever app owns the caret instead of asking Omi. It works the way Wispr
+Flow does: the hold is recorded whole, nothing is typed while the key is held,
+and at key-up the turn is transcribed once with the most accurate recognizer
+that can be reached, cleaned up, and pasted in one piece. `VoiceTypeSession`
+owns the dictate-or-ask decision and the delivery, and nothing else does.
 
-- The decision latches **one way**: once typing, always typing for that turn.
-  Not-typing never latches, because the first on-device decode of a hold is a
-  couple of characters of a half-spoken word — latching on that rejected every
-  real turn before "Type" was fully said.
-- `VoiceTypeCommandParser` is tri-state for the same reason: a transcript that is
-  still a viable prefix of a wake word decides nothing.
-- `VoiceTypeStabilizer` holds back the decoder's moving edge: text is typed once
-  two consecutive decodes agree on it, and a word the newer decode is still
-  spelling waits one probe. Whole words are released immediately (waiting there
-  costs a word of latency and buys nothing) and an unchanged decode releases in
-  full, so a pause catches up.
-- `VoiceTypeStreamPlanner` turns each revised transcript into the smallest edit
-  (backspaces + insertion), so recognizer revisions correct what is already on
-  screen instead of appending a second wrong word.
-- `CGEventKeystrokeSink` posts from a **private-state** event source. PTT is a
-  modifier-only chord, so the user is physically holding Option while the events
-  are posted; a `.hidSystemState` source would turn every dictated "n" into ⌥n.
-- The realtime hub does not transcribe the user's own speech until after commit,
-  which is far too late to type as they speak or to withhold the model's answer.
-  So `PushToTalkManager` re-decodes the uncommitted window with the
-  already-loaded Parakeet model (`PTTLanguageIdentifier.transcribe`, ~100 ms per
-  probe) every 200 ms, on every route. `VoiceTypeAudioTrim` drops the quiet
-  lead-in first: a hold begins at key-down, and handing seconds of room tone to
-  the recognizer yields invented words, not silence.
-- **Once the wake word is recognised the turn has its own pipeline**, whatever
-  route the reducer chose at key-down: mic → on-device probes for the moving
-  edge, the backend stream for the finished stretches, keystrokes out. The hub
-  turn is released right then (`cancelTurn`), not at key-up — a hold can run for
-  minutes, and streaming those minutes to a realtime model whose answer will be
-  cancelled is spend for nothing, and would make that socket's lifetime the
-  dictation's. Reducer route transitions under a long hold (the 1 s warm-wait
-  deadline, a late hub-ready) are ignored for a claimed turn: the chunk handler
-  checks the claim before any route branch, and `resolveRealtimeHubWarmWait` /
-  `.fallbackToTranscription` return early. Key-up closes a claimed turn through
-  one path (`finishVoiceTypingTurn`) on every route.
-- `VoiceTypeDecodeWindow` is both the decode buffer and the turn's **timeline**.
-  Every mic byte since key-down passes through it and `consumedBytes` counts what
-  has been dropped, so a turn-relative position maps onto the pending audio.
-  Once a stretch has been typed it is committed — text frozen, audio dropped —
-  so probe cost and memory are bounded by the window and the hold has no length
-  limit.
-- **The backend stream commits by time.** `/v2/voice-message/transcribe-stream`
-  (`velma-2` first) forwards only *finished* utterances, one per message, each
-  at the pause that ended it; it never sends the whole transcript. Each final is
-  folded in with `adoptStreamFinal(text:startByte:endByte:)`: it becomes the next
-  committed stretch and the audio it covers is dropped, exactly like a local
-  commit, and the probes carry on from there. Replacing the transcript with each
-  message was the bug that froze dictation after the first pause — the second
-  utterance no longer opened with "type", so nothing downstream would type it.
-  Rules that keep the seams clean: the stream gets first claim on each pause
-  (the local commit needs 1.5 s of quiet while the stream is healthy, 0.35 s
-  otherwise); a final that begins inside already-committed audio is dropped, so
-  no region is ever typed twice; a final that would leave a prefix the parser
-  rejects (`stillDictates`) is refused, so a stream that lost the wake word
-  cannot freeze the turn; a final that starts *after* the consumed edge never
-  drops the gap unheard — live, one adopted across a 10 s gap lost two sentences
-  that had only ever been the moving edge — so the manager decodes a speech gap
-  on-device first (`uncommittedSpeech(before:)`) and commits both texts together,
-  re-checking the window after the decode, and the window itself refuses a
-  speech gap (`uncommittedSpeechBefore`); a window opening mid-sentence has its
-  recognizer-capitalized first word lowered (`continuingSentence`, "However, A
-  few" → "However, a few"); stream time zero is anchored to the window's consumed
-  edge when the socket opens, and the pending audio is replayed to it then, so
-  the stream hears the wake word too and positions survive a reconnect. Audio is
-  sent live only while the socket is open.
-- Two seam rules learned live. The stream's utterance `end` can land a few tens
-  of milliseconds before the word it closes stops sounding; cutting there gave
-  the next window the word's last syllable, typed as a word of its own
-  ("thinking ng"). `adoptStreamFinal` slides the seam forward to the next quiet
-  20 ms window (`VoiceTypeAudioTrim.quietBoundary`, 0.6 s lookahead). And a
-  second hold into the same line landed flush against the first ("voiceI
-  think"): at arming, `VoiceTypeSession` asks the sink whether the caret sits
-  right after a word (`caretFollowsWordCharacter`, one character read through
-  `AXStringForRange`) and types a separating space first; the space is on
-  screen but not in the `Completion`.
-- Keystrokes go only to the application that was frontmost when the turn
-  armed. If focus moves, the session pauses (`focusTarget`) and catches up when
-  it returns — live, a dock click brought Omi's own window forward mid-hold and
-  two stream commits rewrote text inside it. A gap or flush remainder with less
-  than 0.5 s of voiced audio (`VoiceTypeAudioTrim.speechBytes`) is not decoded:
-  the on-device model answers a breath with "Thank you.".
-- The on-screen keyword corrector (`PTTTranscriptContextualCorrector`) runs on
-  the dictated text only, never on the wake word
-  (`VoiceTypeCommandParser.correctingPayload`). Live, a window title containing
-  "typ" made it rewrite "Type" itself; no probe parsed as a dictation, and the
-  realtime model, hearing "type …", spawned an agent to do the typing.
-- A stream commit is not typed by itself. It marks the next probe's push as
-  *settled* (`voiceTypingSettleOnNextPush`): that push carries committed + the
-  new window's decode, so the stream's corrections land inside the committed
-  stretch however far back they reach
-  (`VoiceTypeStreamPlanner.plan(for:rewritesFreely:)`) while the moving edge
-  stays on screen. Pushing the committed prefix alone deleted the whole edge and
-  retyped it a probe later — the "double up" flicker. Moving-edge revisions stay
-  bounded to the last three words. Edits of 20+ backspaces are logged as shape.
+- **Hold:** the microphone only records. Every route that can end as a
+  dictation appends its chunks to the shared turn buffer (`batchAudioBuffer`),
+  and that buffer is the one recording the close reads. The realtime hub still
+  receives audio until the turn is known to be a dictation.
+- **Wake-word probe (advisory).** `VoiceTypeWakeWordProbeSchedule` runs the
+  on-device Parakeet model (`PTTLanguageIdentifier.transcribe`) over the first
+  few seconds of the hold at most twice per turn, scheduled by *voiced* bytes
+  so a locked turn's silent lead-in does not trigger it. A probe that hears
+  the wake word claims the turn, releases the hub turn (`cancelTurn`) so
+  minutes of dictation are not streamed to a model whose answer will be
+  cancelled, and shows "Dictating — release to paste". A probe that misses is
+  harmless: the closing transcript decides on its own.
+- **The decision latches one way** (`VoiceTypeSession.claim`): once typing,
+  always typing for that turn. Not-typing never latches, because a probe hears
+  a couple of seconds of a sentence the user has barely started.
+  `VoiceTypeCommandParser` is tri-state for the same reason. A turn already
+  claimed reads its closing transcript leniently
+  (`payloadAssumingDictation`): the backend may spell the wake word "Tie" or
+  "Typed", and losing the dictation over that would be worse than one stray
+  word.
+- **Key-up.** `continueFinalization` records the paste target
+  (`noteRelease`, the frontmost app) before any recognizer runs, then closes
+  the turn through one path on every route, `finishVoiceTypingTurn`. The
+  reducer stays in `.finalizing` (the bar shows it thinking) until the paste
+  lands, exactly as it does for a batch-transcribed question, and every path
+  ends the turn.
+  1. **Transcribe** (`DictationTranscriber`): the backend's pre-recorded
+     recognizer (`/v2/voice-message/transcribe`, `velma-2` first) with the
+     on-screen keywords as vocabulary, bounded to 12 s; on failure, timeout,
+     or an empty result, the on-device model. With no network only the
+     on-device model runs. A route that already produced a backend transcript
+     (omni STT, batch STT after a warm-wait) hands it in as `knownTranscript`
+     so the audio is not transcribed twice. Every fallback is recorded
+     (`area=voice_typing`).
+  2. **Correct** the dictated text against on-screen keywords
+     (`PTTTranscriptContextualCorrector`), never the wake word
+     (`correctingPayload`) — live, a window title containing "typ" once
+     rewrote "Type" itself.
+  3. **Format** (`DictationFormatter`, always): spoken fillers out, the
+     punctuation they leave behind repaired, first letter capitalized.
+     English-only fillers ("er") are stripped only for English.
+  4. **Polish** (`DictationPolisher`, online only): the lightweight Gemini
+     model through the backend proxy (`GeminiClient`, thinking off, 6 s cap)
+     rewrites the transcript as the user would have typed it — self-
+     corrections applied, spoken "new paragraph" honoured, numbers and
+     addresses written out — with the target app and the keywords as context.
+     Its output is *accepted*, never trusted: `accept` strips wrapped quotes
+     and refuses empty, narrated, or unrecognisably resized rewrites, and any
+     refusal, failure, or timeout keeps the formatted text.
+  5. **Deliver** (`VoiceTypeSession.deliver` → `PasteboardTextInsertionSink`):
+     the text goes onto the pasteboard, marked transient for clipboard
+     managers, one ⌘V is posted from a private-state event source (a locked
+     turn is finished by a chord press, so Option may still be physically
+     held), and the previous clipboard is put back 0.4 s later unless the user
+     has copied something since. If focus has moved since key-up — live, a
+     dock click brought Omi's own window forward mid-hold — the text is
+     copied instead and the bar says "Copied — press ⌘V to paste". A caret
+     sitting right after a word gets a separating space first
+     (`caretFollowsWordCharacter`, one character read through
+     `AXStringForRange`).
+- **Hub commits are gated.** Before any hub commit (`commitHubTurn`, and the
+  buffered warm-wait commit), `gateHubCommitOnFinalDictationCheck` decodes
+  the opening of the turn on-device and claims a dictation the probes missed.
+  Observed live without it: "type what is on my calendar" committed as a
+  question, and the model spawned an agent to do the typing itself — not a
+  missed dictation but an unrequested action.
+- **Offline dictation.** `PTTRoutePolicy.decide` picks the route at key-down
+  and checks the network first and unconditionally: with no path
+  (`NetworkReachability`, an `NWPathMonitor`), the turn takes the
+  `.onDeviceASR` route, is transcribed by the on-device model at key-up, and
+  is formatted without the polisher. Only dictation completes offline: a
+  question ends as `providerFailed` rather than pretending to be in flight.
 - A claimed hub turn is **cancelled, never committed**, so the model never
   answers a dictation out loud.
-- A finished turn reports a `Completion` carrying the text that actually reached
-  the focused app — not the raw utterance, which still holds the "type" wake
-  word. `PushToTalkManager` journals it as `Typed: <text>` through the ordinary
-  `recordExchange` on the realtime voice surface, so a dictation persists and
-  enters conversation context exactly like a spoken question and the next turn
-  can refer back to it. The continuity key is derived from the turn, so a
-  retried flush cannot write a second copy. Key-up asks the stream to finish
-  and waits up to 0.6 s for its last utterance to land through the same commit
-  path; whatever is still pending after that is closed by one on-device decode.
-  The flush outlives the reducer's terminal, so `performTerminalCleanup` leaves
-  the window and the stream alone while a flush is open (resetting them there
-  lost the last word of every hold), and the flush corrects against the
-  keywords pinned at key-up because cleanup clears the context snapshot.
+- A finished turn is journaled as `Typed: <text>` (or `Copied to clipboard:
+  <text>`) through the ordinary `recordExchange` on the realtime voice
+  surface, so a dictation persists and enters conversation context exactly
+  like a spoken question. The continuity key is derived from the turn.
 
-- **Offline dictation.** `PTTRoutePolicy.decide` picks the route at key-down and
-  checks the network first and unconditionally: with no path (`NetworkReachability`,
-  an `NWPathMonitor`), the turn takes the `.onDeviceASR` route and is transcribed
-  entirely by the already-loaded Parakeet model. Nothing waits on the hub's warm
-  deadline to discover there was never a network, so the first keystroke lands as
-  fast as it does online. A hub that reports itself admitted does not override
-  this — it is a socket that *was* admitted, not one that can still carry the
-  turn. Only dictation completes offline: answering needs a cloud model, so a
-  non-dictation turn ends as `providerFailed` rather than pretending to be in
-  flight. The route is a real case, not a reused `deepgramBatch`, so telemetry
-  never reports Deepgram for a turn that never left the machine.
-
-Guards: `Tests/VoiceTypingTests.swift`, `Tests/VoiceTypingSimulationTests.swift`.
-Harness: `omi-ctl action ptt_manager_turn pcm=<s16le 16k> pace_ms=100 settle_ms=1500`
+Guards: `Tests/VoiceTypingTests.swift` (parser, session, formatter, polisher
+acceptance, transcriber fallback order, probe schedule, route policy).
+Harness: `omi-ctl action ptt_manager_turn pcm=<s16le 16k> pace_ms=100 settle_ms=4000`
 drives a real-time hold through the production chunk path and reports
-`voice_typing_*` diagnostics.
+`voice_typing_*` diagnostics (`delivery`, `transcriber`, `polished`).
 
 ## The pill's glass
 

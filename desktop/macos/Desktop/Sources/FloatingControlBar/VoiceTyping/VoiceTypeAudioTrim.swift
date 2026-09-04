@@ -17,26 +17,10 @@ enum VoiceTypeAudioTrim {
   /// attack of the first consonant.
   private static let preRollSamples = 1_600  // 100 ms
 
-  /// Whether the last `seconds` of the buffer are near-silence — the speaker
-  /// has paused, so text can be committed without cutting a word in half.
-  ///
-  /// Uses the same threshold as the leading trim: what counts as room tone at
-  /// the start of a turn counts as a pause in the middle of one.
-  static func endsQuiet(_ pcm16k: Data, seconds: Double = 0.35) -> Bool {
-    let tailSamples = Int(seconds * 16_000)
-    let sampleCount = pcm16k.count / 2
-    guard sampleCount >= tailSamples, tailSamples > 0 else { return false }
-    let start = (sampleCount - tailSamples) * 2
-    return pcm16k.withUnsafeBytes { raw -> Bool in
-      let samples = raw.bindMemory(to: Int16.self)
-      var sumSquares = 0.0
-      for index in (start / 2)..<sampleCount {
-        let value = Double(Int16(littleEndian: samples[index]))
-        sumSquares += value * value
-      }
-      return (sumSquares / Double(tailSamples)).squareRoot() < speechRMSThreshold
-    }
-  }
+  /// The least voiced audio worth decoding on its own: 0.5 s at 16 kHz s16le.
+  /// Below this there is no word to recover, only a breath, and the on-device
+  /// decoder answers a breath with an invented phrase ("Thank you.").
+  static let minimumDecodableSpeechBytes = 16_000
 
   /// Bytes of `pcm16k` that lie in 20 ms windows at speech level — how much
   /// of a buffer is actually voice, as opposed to the pauses around it.
@@ -57,38 +41,6 @@ enum VoiceTypeAudioTrim {
         start += windowSamples
       }
       return loudWindows * windowSamples * 2
-    }
-  }
-
-  /// The first quiet 20 ms window at or after `offset`, as a byte offset, if
-  /// one begins within `lookaheadSeconds`.
-  ///
-  /// Used to move a commit seam onto a pause. A streaming recognizer's
-  /// utterance `end` can land a few tens of milliseconds before the word it
-  /// closes has finished sounding; cutting there hands the next window the
-  /// word's last syllable, which it spells as a word of its own ("thinking" →
-  /// "thinking ng"). Sliding the seam to the next quiet window makes the cut
-  /// where a local commit would have made it.
-  static func quietBoundary(in pcm16k: Data, from offset: Int, lookaheadSeconds: Double = 0.6) -> Int? {
-    let sampleCount = pcm16k.count / 2
-    let startSample = max(0, min(offset / 2, sampleCount))
-    let lastStart = min(sampleCount - windowSamples, startSample + Int(lookaheadSeconds * 16_000))
-    guard lastStart >= startSample else { return nil }
-    return pcm16k.withUnsafeBytes { raw -> Int? in
-      let samples = raw.bindMemory(to: Int16.self)
-      var start = startSample
-      while start <= lastStart {
-        var sumSquares = 0.0
-        for index in start..<(start + windowSamples) {
-          let value = Double(Int16(littleEndian: samples[index]))
-          sumSquares += value * value
-        }
-        if (sumSquares / Double(windowSamples)).squareRoot() < speechRMSThreshold {
-          return start * 2
-        }
-        start += windowSamples
-      }
-      return nil
     }
   }
 
@@ -120,5 +72,13 @@ enum VoiceTypeAudioTrim {
       }
       return Data()
     }
+  }
+
+  /// The opening of a turn, ready for a wake-word decode: leading room tone
+  /// dropped, then at most `maxBytes`. Always zero-indexed, since every
+  /// consumer here indexes from zero.
+  static func opening(of pcm16k: Data, maxBytes: Int) -> Data {
+    let trimmed = trimmingLeadingSilence(pcm16k)
+    return Data(trimmed.prefix(maxBytes))
   }
 }

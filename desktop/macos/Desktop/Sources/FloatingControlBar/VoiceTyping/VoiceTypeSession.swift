@@ -4,77 +4,61 @@ import Foundation
 /// One push-to-talk turn's worth of voice typing.
 ///
 /// The session is the only thing that decides whether a turn dictates into the
-/// focused app instead of asking Omi. That decision latches in one direction
-/// only: once a turn is typing it stays typing, because a later transcript
-/// revision may change the words but must never change their destination.
-/// *Not* typing never latches — an early decode is one or two characters of a
-/// half-spoken word, which is not evidence about a sentence the user has barely
-/// started. Latching on it is what silently disabled the whole feature in live
-/// testing: a 2-character first decode rejected the turn before "Type" existed.
+/// focused app instead of asking Omi, and the only thing that delivers the
+/// text. Nothing is delivered while the key is held: the turn is recorded
+/// whole, transcribed once the key comes up, and pasted in one piece — the
+/// transcript of a finished utterance is more accurate than any moving edge,
+/// and text that is pasted once is never rewritten under the user.
 ///
-/// Callers feed `update` on every transcript change and route the turn to chat
-/// only while `claimsTurn` is false.
+/// The decision latches in one direction only: once a turn is typing it stays
+/// typing, because a later, better transcript may change the words but must
+/// never change their destination. *Not* typing never latches — a mid-hold
+/// probe hears a couple of seconds of a sentence the user has barely started,
+/// which is not evidence about the closing transcript.
 @MainActor
 final class VoiceTypeSession {
 
-  private let sink: KeystrokeSink
+  private let sink: TextInsertionSink
   private let isAccessibilityTrusted: () -> Bool
-  private var planner = VoiceTypeStreamPlanner()
-  private var stabilizer = VoiceTypeStabilizer()
 
   private enum Latch {
     case none
     case typing
     /// A type command that cannot be delivered (no Accessibility grant). Latched
-    /// so one denied turn reports one fallback, not one per decode.
+    /// so one denied turn reports one fallback, not one per transcript.
     case blocked
   }
 
-  /// What a finished turn delivered. The caller journals `typed` so the dictated
-  /// sentence joins the conversation history; a turn that never dictated has
+  /// What a finished turn delivered. The caller journals the text so the
+  /// dictation joins the conversation history; a turn that never dictated has
   /// nothing to record.
   enum Completion: Equatable {
     case none
-    case typed(String)
+    /// The text was pasted into the app that had focus when the key came up.
+    case pasted(String)
+    /// Focus moved (or the paste could not be posted), so the text was left on
+    /// the clipboard for the user instead of being pasted into the wrong app.
+    case copied(String)
+
+    var text: String? {
+      switch self {
+      case .none: return nil
+      case .pasted(let text), .copied(let text): return text
+      }
+    }
   }
 
   private var latch: Latch = .none
-  /// Typed ahead of the first word when the caret was sitting right after a
-  /// word, so a dictation that continues a line does not run into it. Part of
-  /// what is on screen (the planner diffs against it) but not part of what the
-  /// turn dictated.
-  private var leadingSeparator = ""
-  /// Where the dictation was aimed when it armed. Keystrokes are posted only
-  /// while that is still the frontmost application; otherwise the turn pauses
-  /// and catches up when focus returns. Observed live: the user clicked the
-  /// Omi dock icon mid-hold and two stream commits rewrote text inside Omi's
-  /// own window instead of the document.
-  private var armedFocusTarget: String?
-  private var pausedForFocus = false
-  /// Set while a turn that has already been closed is still flushing its last
-  /// words. Teardown must not reset the planner underneath that flush, or the
-  /// diff would be computed against an empty buffer and retype the whole
-  /// sentence into the user's document.
-  private var isFlushing = false
-  /// Bumped by every `begin`, so a flush belonging to a finished turn can never
-  /// write into the turn that replaced it.
-  private var generation = 0
+  /// Where the paste is aimed: the frontmost application when the key came
+  /// up. Observed live before this existed: a dock click brought Omi's own
+  /// window forward and a dictation was typed into it instead of the document.
+  private var releaseFocusTarget: String?
 
-  /// True once this turn has actually dictated. The caller uses it to suppress
-  /// the chat dispatch — so a turn is only ever taken away from Omi when text
-  /// really did land in the focused app.
+  /// True once this turn has been recognised as a dictation.
   var claimsTurn: Bool { latch == .typing }
 
-  /// Characters delivered to the focused app so far this turn.
-  var typedCount: Int { planner.typed.count }
-
-  /// The dictated text on screen, without the separator typed ahead of it.
-  private var dictatedText: String {
-    String(planner.typed.dropFirst(leadingSeparator.count))
-  }
-
   init(
-    sink: KeystrokeSink = CGEventKeystrokeSink(),
+    sink: TextInsertionSink = PasteboardTextInsertionSink(),
     isAccessibilityTrusted: @escaping () -> Bool = { AXIsProcessTrusted() }
   ) {
     self.sink = sink
@@ -82,141 +66,96 @@ final class VoiceTypeSession {
   }
 
   func begin() {
-    generation &+= 1
-    isFlushing = false
     latch = .none
-    leadingSeparator = ""
-    armedFocusTarget = nil
-    pausedForFocus = false
-    planner.reset()
-    stabilizer.reset()
+    releaseFocusTarget = nil
   }
 
-  /// Feeds the whole utterance heard so far. Returns whether this turn belongs
-  /// to voice typing.
+  /// Decides from a transcript — a mid-hold probe's or the closing one —
+  /// whether this turn dictates. Returns whether the turn belongs to voice
+  /// typing. Latches only towards typing.
+  @discardableResult
+  func claim(transcript: String) -> Bool {
+    switch latch {
+    case .blocked: return false
+    case .typing: return true
+    case .none: break
+    }
+    guard case .typing = VoiceTypeCommandParser.decide(transcript) else { return false }
+    return arm()
+  }
+
+  /// The text this turn dictates, from its closing transcript, or nil when the
+  /// turn is not a dictation.
   ///
-  /// - Parameter isSettled: true for text that is not going to move again — the
-  ///   closing transcript, or a stretch a streaming recognizer has finished. It
-  ///   is typed in full rather than held back a word, and it may correct what is
-  ///   already on screen however far back that reaches.
-  @discardableResult
-  func update(transcript: String, isSettled: Bool = false) -> Bool {
-    guard latch != .blocked else { return false }
-    let usable =
-      isSettled ? stabilizer.settle(transcript) : stabilizer.stabilized(transcript)
-    guard case .typing(let payload) = VoiceTypeCommandParser.decide(usable) else {
-      // Undecided or not-a-command: nothing to type *yet*. A turn already typing
-      // keeps its claim; one that never armed stays available to chat.
-      return claimsTurn
+  /// A turn already claimed reads the transcript leniently: the closing
+  /// transcript comes from a different recognizer than the probe that claimed
+  /// the turn, and it may spell the wake word differently ("Tie, hello").
+  /// Losing the whole dictation over the wake word's spelling would be far
+  /// worse than one stray word.
+  func payload(from transcript: String) -> String? {
+    guard claim(transcript: transcript) else { return nil }
+    return VoiceTypeCommandParser.payloadAssumingDictation(transcript)
+  }
+
+  /// Records where the paste is aimed. Called at key-up on every route,
+  /// before any transcription runs, so the seconds the recognizer takes
+  /// cannot move the target.
+  func noteRelease() {
+    releaseFocusTarget = sink.focusTarget()
+  }
+
+  /// Pastes the dictated text into the app that had focus at release, and
+  /// ends the turn. If focus has moved since, the text is copied instead —
+  /// the user gets it with one ⌘V rather than finding it in the wrong window.
+  func deliver(_ text: String) -> Completion {
+    defer {
+      latch = .none
+      releaseFocusTarget = nil
     }
-    guard armIfNeeded() else { return false }
-    emit(payload, rewritesFreely: isSettled)
-    return true
-  }
-
-  /// Feeds the final transcript and flushes any text the live stream never
-  /// delivered. Returns what the turn dictated, if anything.
-  @discardableResult
-  func finish(transcript: String) -> Completion {
-    let claimed = update(transcript: transcript, isSettled: true)
-    // Read before the reset below clears it: `typed` is the exact text that
-    // reached the focused app, which is what the transcript should record.
-    let completion: Completion = claimed ? .typed(dictatedText) : .none
-    latch = .none
-    planner.reset()
-    stabilizer.reset()
-    return completion
-  }
-
-  /// Whether `token` still names the open flush window. Lets a caller that
-  /// waits for a late transcript check it is still closing the turn it opened,
-  /// rather than one that has since been replaced.
-  func isFlushing(token: Int) -> Bool {
-    isFlushing && token == generation
-  }
-
-  /// Opens the post-commit flush window. Returns the token `endFlush` must
-  /// present, so a flush cannot land in a later turn.
-  func beginFlush() -> Int {
-    isFlushing = true
-    return generation
-  }
-
-  /// Types whatever the closing decode heard beyond what the live probes already
-  /// delivered, then ends the turn. Returns what the turn dictated, so the
-  /// caller journals the completed sentence rather than the partial one the
-  /// probes had delivered when the key came up.
-  @discardableResult
-  func endFlush(token: Int, finalTranscript: String?) -> Completion {
-    guard token == generation, isFlushing else { return .none }
-    isFlushing = false
-    var claimed = claimsTurn
-    if let finalTranscript {
-      claimed = update(transcript: finalTranscript, isSettled: true) || claimed
+    guard latch == .typing else { return .none }
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return .none }
+    if let aimed = releaseFocusTarget, let current = sink.focusTarget(), current != aimed {
+      log("VoiceTypeSession: focus left the dictation target — copied \(trimmed.count) chars instead")
+      sink.copy(trimmed)
+      return .copied(trimmed)
     }
-    let completion: Completion = claimed ? .typed(dictatedText) : .none
-    latch = .none
-    planner.reset()
-    stabilizer.reset()
-    return completion
+    // Decided from where the caret is right now: the first word must not land
+    // flush against the word before it ("voiceI think").
+    let separator = sink.caretFollowsWordCharacter() ? " " : ""
+    guard sink.paste(separator + trimmed) else {
+      log("VoiceTypeSession: paste could not be posted — copied \(trimmed.count) chars instead")
+      sink.copy(trimmed)
+      return .copied(trimmed)
+    }
+    // The target's bundle id only — never the text.
+    let target = (releaseFocusTarget ?? "?").split(separator: ":").last.map(String.init) ?? "?"
+    log(
+      "VoiceTypeSession: pasted \(trimmed.count) chars into \(target)"
+        + (separator.isEmpty ? "" : " (continuing a line)"))
+    return .pasted(trimmed)
   }
 
-  /// Ends the turn without typing anything further (cancel, error, teardown).
+  /// Ends the turn without delivering anything (cancel, error, teardown).
   func abandon() {
-    guard !isFlushing else { return }
     latch = .none
-    planner.reset()
-    stabilizer.reset()
+    releaseFocusTarget = nil
   }
 
-  private func armIfNeeded() -> Bool {
-    if latch == .typing { return true }
+  private func arm() -> Bool {
     guard isAccessibilityTrusted() else {
       latch = .blocked
       log("VoiceTypeSession: Accessibility not granted — releasing turn to chat")
       DesktopDiagnosticsManager.shared.recordFallback(
         area: "voice_typing",
-        from: "keystroke_injection",
+        from: "paste_injection",
         to: "chat_query",
         reason: "policy",
         outcome: .degraded)
       return false
     }
     latch = .typing
-    // Decided once, at arming, from where the caret is right now: the first
-    // word must not land flush against the word before it ("voiceI think").
-    leadingSeparator = sink.caretFollowsWordCharacter() ? " " : ""
-    armedFocusTarget = sink.focusTarget()
-    log("VoiceTypeSession: typing turn armed" + (leadingSeparator.isEmpty ? "" : " (continuing a line)"))
+    log("VoiceTypeSession: typing turn armed")
     return true
-  }
-
-  private func emit(_ payload: String, rewritesFreely: Bool) {
-    // The separator goes in with the first word, never on its own: a bare
-    // wake word must leave nothing behind.
-    guard !payload.isEmpty else { return }
-    if let armed = armedFocusTarget, let current = sink.focusTarget(), current != armed {
-      if !pausedForFocus {
-        pausedForFocus = true
-        log("VoiceTypeSession: focus left the dictation target — typing paused until it returns")
-      }
-      return
-    }
-    if pausedForFocus {
-      pausedForFocus = false
-      log("VoiceTypeSession: focus returned — typing resumes")
-    }
-    let before = planner.typed.count
-    let edit = planner.plan(for: leadingSeparator + payload, rewritesFreely: rewritesFreely)
-    guard !edit.isEmpty else { return }
-    if edit.backspaces >= 20 {
-      // Shape only, never text: a rewrite this large is either a correction
-      // the user will see as a flash or a planner/screen divergence.
-      log(
-        "VoiceTypeSession: large edit — typed=\(before) backspaces=\(edit.backspaces) "
-          + "insert=\(edit.insertion.count) settled=\(rewritesFreely)")
-    }
-    sink.deleteBackward(edit.backspaces)
-    sink.insert(edit.insertion)
   }
 }

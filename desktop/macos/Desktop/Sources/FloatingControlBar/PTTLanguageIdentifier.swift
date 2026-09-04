@@ -104,11 +104,11 @@ actor PTTLanguageIdentifier {
 
   /// Decode a PTT turn buffer to text on-device, with no language verdict.
   ///
-  /// Voice typing needs the words while the key is still held and long before any
-  /// provider answers — the realtime hub does not transcribe the user's own
-  /// speech until after commit, which is far too late to decide that a turn
-  /// dictates instead of asks. This reuses the already-loaded multilingual model
-  /// rather than standing up a second one.
+  /// Voice typing uses this to hear the wake word in the opening of a hold and,
+  /// with no network, to transcribe the whole turn at key-up — the realtime hub
+  /// does not transcribe the user's own speech until after commit, which is far
+  /// too late to decide that a turn dictates instead of asks. This reuses the
+  /// already-loaded multilingual model rather than standing up a second one.
   func transcribe(pcm16k: Data) async -> String? {
     guard let manager = await loadedManager() else { return nil }
     let samples = Self.int16ToFloat32(pcm16k)
