@@ -521,6 +521,21 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
     XCTAssertEqual(schedule.probesTaken, 2)
   }
 
+  func testRealMicrophoneChunksSmallerThanAWindowStillScheduleProbes() {
+    // Live: the 48 kHz IOProc buffer resampled to 16 kHz arrives as ~342-byte
+    // chunks, smaller than one 20 ms window, so no chunk ever measured as
+    // voice and no probe ever ran on a real hold.
+    var schedule = VoiceTypeWakeWordProbeSchedule()
+    var probeChunks: [Int] = []
+    for index in 1...600 where schedule.observe(chunk: Self.chunk(voiced: true, bytes: 342)) {
+      probeChunks.append(index)
+    }
+    // 38,400 voiced bytes → chunk 113 (38,646 bytes); 83,200 → chunk 244.
+    XCTAssertEqual(probeChunks.count, 2)
+    XCTAssertEqual(probeChunks[0], 113, accuracy: 2)
+    XCTAssertEqual(probeChunks[1], 244, accuracy: 2)
+  }
+
   func testSilenceBetweenWordsDoesNotCountTowardsTheThreshold() {
     var schedule = VoiceTypeWakeWordProbeSchedule()
     var probed = false

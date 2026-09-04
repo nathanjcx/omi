@@ -25,11 +25,23 @@ struct VoiceTypeWakeWordProbeSchedule: Equatable {
   private(set) var voicedBytes = 0
   private(set) var probesTaken = 0
   private(set) var isDecided = false
+  /// Audio not yet a whole 20 ms window. The microphone delivers whatever
+  /// the CoreAudio IOProc hands it — ~342 bytes per chunk on a 48 kHz
+  /// device — and a chunk smaller than a window measures as no voice at all.
+  /// Live, that meant no probe ever ran on a real hold. Windows are cut
+  /// across chunk boundaries instead.
+  private var pending = Data()
+  private static let windowBytes = 640
 
   /// Feeds one mic chunk. Returns true when a probe is due now.
   mutating func observe(chunk: Data) -> Bool {
     guard !isDecided, probesTaken < Self.voicedByteThresholds.count else { return false }
-    voicedBytes += VoiceTypeAudioTrim.speechBytes(in: chunk)
+    pending.append(chunk)
+    let whole = (pending.count / Self.windowBytes) * Self.windowBytes
+    if whole > 0 {
+      voicedBytes += VoiceTypeAudioTrim.speechBytes(in: Data(pending.prefix(whole)))
+      pending = Data(pending.dropFirst(whole))
+    }
     guard voicedBytes >= Self.voicedByteThresholds[probesTaken] else { return false }
     probesTaken += 1
     return true

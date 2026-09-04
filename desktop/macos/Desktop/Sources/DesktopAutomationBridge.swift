@@ -1472,7 +1472,7 @@ final class DesktopAutomationActionRegistry {
       name: "ptt_manager_turn",
       summary:
         "Inject a PCM16/16k mono hold through PushToTalkManager and realtime admission; returns lifecycle diagnostics",
-      params: ["pcm", "pace_ms", "settle_ms"]
+      params: ["pcm", "pace_ms", "settle_ms", "chunk_bytes"]
     ) { params in
       guard let path = params["pcm"],
         let pcm16k = try? Data(contentsOf: URL(fileURLWithPath: path)),
@@ -1480,10 +1480,13 @@ final class DesktopAutomationActionRegistry {
       else { return ["error": "missing or unreadable 'pcm' file (expected raw s16le 16k mono)"] }
       let paceMs = UInt64(params["pace_ms"] ?? "") ?? 0
       let settleMs = UInt64(params["settle_ms"] ?? "") ?? 0
+      // Default 100 ms. Pass 342 to mimic what the CoreAudio IOProc hands a
+      // 48 kHz device's capture after resampling — chunk size has already
+      // hidden one bug that only a real microphone showed.
+      let chunkSize = max(2, Int(params["chunk_bytes"] ?? "") ?? 3_200)
 
       var result = PushToTalkManager.shared.beginRealtimePushToTalkForAutomation()
       guard result["listening"] == "true" else { return result }
-      let chunkSize = 3_200
       var offset = 0
       var injected = 0
       while offset < pcm16k.count {
