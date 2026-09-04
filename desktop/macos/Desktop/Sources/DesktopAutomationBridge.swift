@@ -1468,16 +1468,28 @@ final class DesktopAutomationActionRegistry {
     // hold), which is what lets the voice-typing probes, the stream's utterance
     // cadence, and the hub's warm deadline run on the timeline a physical hold
     // has. `settle_ms` waits after release for the closing flush to land.
+    // `say` synthesizes the hold's audio in-process (system speech synthesizer),
+    // so a flow needs neither a fixture file nor a microphone.
     register(
       name: "ptt_manager_turn",
       summary:
         "Inject a PCM16/16k mono hold through PushToTalkManager and realtime admission; returns lifecycle diagnostics",
-      params: ["pcm", "pace_ms", "settle_ms"]
+      params: ["pcm", "say", "voice", "pace_ms", "settle_ms"]
     ) { params in
-      guard let path = params["pcm"],
-        let pcm16k = try? Data(contentsOf: URL(fileURLWithPath: path)),
-        !pcm16k.isEmpty
-      else { return ["error": "missing or unreadable 'pcm' file (expected raw s16le 16k mono)"] }
+      let pcm16k: Data
+      if let spoken = params["say"], !spoken.isEmpty {
+        do {
+          pcm16k = try DesktopAutomationSpeechFixture.pcm16k(saying: spoken, voice: params["voice"] ?? "Samantha")
+        } catch {
+          return ["error": "speech synthesis failed: \(error)"]
+        }
+      } else if let path = params["pcm"],
+        let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty
+      {
+        pcm16k = data
+      } else {
+        return ["error": "pass 'say=<text>' or a readable 'pcm' file (raw s16le 16k mono)"]
+      }
       let paceMs = UInt64(params["pace_ms"] ?? "") ?? 0
       let settleMs = UInt64(params["settle_ms"] ?? "") ?? 0
 

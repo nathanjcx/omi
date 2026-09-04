@@ -1,0 +1,59 @@
+version: 2
+name: voice-typing
+tier: 2
+description: Say "type" during a push-to-talk hold and dictate into the focused app; the hold is synthesized in-process, so no microphone, fixture file, or human speech is needed
+app: non-prod
+covers:
+  - desktop/macos/Desktop/Sources/Automation/DesktopAutomationSpeechFixture.swift
+  - desktop/macos/Desktop/Sources/DesktopAutomationBridge.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/NetworkReachability.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/PTTLanguageIdentifier.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/PushToTalkManager.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/KeystrokeSink.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/PTTRoutePolicy.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/VoiceTypeAudioTrim.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/VoiceTypeCommandParser.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/VoiceTypeDecodeWindow.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/VoiceTypeSession.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/VoiceTypeStabilizer.swift
+  - desktop/macos/Desktop/Sources/FloatingControlBar/VoiceTyping/VoiceTypeStreamPlanner.swift
+  - desktop/macos/Desktop/Sources/TranscriptionService.swift
+preconditions:
+  - auth_ready
+steps:
+  - id: S1
+    name: A synthesized hold that opens with the wake word is recognised as a dictation and closes without asking a model
+    bridge.action:
+      name: ptt_manager_turn
+      params:
+        say: "Type. Hello world, this is a short test of voice typing."
+        pace_ms: "100"
+        settle_ms: "2000"
+    expect:
+      result.detail.listening: "true"
+      result.detail.finalized: "true"
+      result.detail.voice_typing_last_wake_word_heard: "true"
+      result.detail.terminal_reason: cancelled
+      result.detail.invalid_transition_count: "0"
+
+  - id: S2
+    name: A synthesized hold that asks a question is left to the model
+    bridge.action:
+      name: ptt_manager_turn
+      params:
+        say: "What is on my calendar tomorrow afternoon?"
+        pace_ms: "100"
+        settle_ms: "500"
+    expect:
+      result.detail.listening: "true"
+      result.detail.finalized: "true"
+      result.detail.voice_typing_claimed: "false"
+      result.detail.voice_typing_typed_chars: "0"
+
+  - id: S3
+    name: Logs contain no bridge failures, invalid voice transitions, or dictation crashes
+    log.expect:
+      absent:
+        - "DesktopAutomationBridge: failed"
+        - "VoiceTurnCoordinator: invalid transition"
+        - "voice-typing decode failed"

@@ -60,6 +60,12 @@ final class VoiceTypeSession {
   /// write into the turn that replaced it.
   private var generation = 0
 
+  /// True once any transcript of this turn parsed as a typing command, whether
+  /// or not it could be delivered (Accessibility may be missing). Lets a
+  /// harness tell "the recognizer never heard the wake word" from "it heard it
+  /// and could not type".
+  private(set) var heardWakeWord = false
+
   /// True once this turn has actually dictated. The caller uses it to suppress
   /// the chat dispatch — so a turn is only ever taken away from Omi when text
   /// really did land in the focused app.
@@ -86,6 +92,7 @@ final class VoiceTypeSession {
     isFlushing = false
     latch = .none
     leadingSeparator = ""
+    heardWakeWord = false
     armedFocusTarget = nil
     pausedForFocus = false
     planner.reset()
@@ -109,6 +116,7 @@ final class VoiceTypeSession {
       // keeps its claim; one that never armed stays available to chat.
       return claimsTurn
     }
+    heardWakeWord = true
     guard armIfNeeded() else { return false }
     emit(payload, rewritesFreely: isSettled)
     return true

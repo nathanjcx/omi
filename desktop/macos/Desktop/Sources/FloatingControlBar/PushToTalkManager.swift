@@ -925,6 +925,8 @@ class PushToTalkManager: ObservableObject {
     // hold was lost ("talk soon." typed as "talk"). The flush stops the stream
     // itself; the window resets when the next turn begins.
     if !voiceTypeSession.isFlushing(token: voiceTypingFlushToken) {
+      // A turn that never dictated still reports what the recognizer heard.
+      voiceTypingLastOutcome = (voiceTypeSession.heardWakeWord, false, 0, voiceTypingCloudFinalsAdopted)
       resetVoiceTypingSources()
     }
     transcriptSegments = []
@@ -1061,7 +1063,9 @@ class PushToTalkManager: ObservableObject {
       let turnID = currentVoiceTurnID,
       phase?.isRecording == true
     else { return false }
-    guard isHubMode || isWaitingForHub || voiceTypeSession.claimsTurn else { return false }
+    // Every route: the chunk path decides what each route does with audio,
+    // and a dictation is recognised on all of them. Gating on the hub here
+    // dropped a synthesized hold whenever the hub was still warming.
     ingestMicChunk(
       pcm16k,
       generation: micCaptureGeneration,
@@ -1070,10 +1074,21 @@ class PushToTalkManager: ObservableObject {
     return true
   }
 
+  /// Outcome of the most recently *closed* dictation, kept past the reset the
+  /// next turn performs so a harness can read it after `ptt_stop`.
+  private var voiceTypingLastOutcome: (heardWakeWord: Bool, claimed: Bool, typedChars: Int, streamFinals: Int)?
+
   /// Harness-visible state of the voice-typing pipeline for the current or
   /// most recent turn. Bounded scalars only.
   func voiceTypingAutomationDiagnostics() -> [String: String] {
-    [
+    var last: [String: String] = [:]
+    if let outcome = voiceTypingLastOutcome {
+      last["voice_typing_last_wake_word_heard"] = outcome.heardWakeWord ? "true" : "false"
+      last["voice_typing_last_claimed"] = outcome.claimed ? "true" : "false"
+      last["voice_typing_last_typed_chars"] = "\(outcome.typedChars)"
+      last["voice_typing_last_stream_finals"] = "\(outcome.streamFinals)"
+    }
+    return last.merging([
       "voice_typing_claimed": voiceTypeSession.claimsTurn ? "true" : "false",
       "voice_typing_typed_chars": "\(voiceTypeSession.typedCount)",
       "voice_typing_committed_chars": "\(voiceTypingWindow.committedText.count)",
@@ -1084,7 +1099,7 @@ class PushToTalkManager: ObservableObject {
         : (voiceTypingCloudConnected ? "connected" : (voiceTypingCloudService == nil ? "none" : "connecting")),
       "voice_typing_cloud_finals": "\(voiceTypingCloudFinalsAdopted)",
       "voice_typing_hub_released": voiceTypingReleasedHubTurn ? "true" : "false",
-    ]
+    ]) { _, new in new }
   }
 
   /// Release an in-progress push-to-talk capture the same way a long-hold key-up does
@@ -3660,19 +3675,37 @@ class PushToTalkManager: ObservableObject {
         }
       }
       guard let self, self.voiceTypeSession.isFlushing(token: flushToken) else { return }
-      let remaining = self.voiceTypingWindowTailForFlush()
-      // The same floor as a gap decode: a breath after the last word is not a
-      // word, and decoding it invents one.
-      let decoded =
-        VoiceTypeAudioTrim.speechBytes(in: remaining) < VoiceTypeDecodeWindow.minimumDecodableSpeechBytes
-        ? nil : await PTTLanguageIdentifier.shared.transcribe(pcm16k: remaining)
-      guard self.voiceTypeSession.isFlushing(token: flushToken) else { return }
+      var decoded: String?
+      // The stream's last utterance can land *while* the closing decode runs
+      // and commit most of what that decode covered. Using the stale decode
+      // then appended the whole sentence a second time behind the stream's
+      // text (observed live). So the window is re-read after each decode and
+      // the remainder decoded again if it moved; two passes bound the work.
+      for _ in 0..<2 {
+        let consumedBefore = self.voiceTypingWindow.consumedBytes
+        let remaining = self.voiceTypingWindowTailForFlush()
+        // The same floor as a gap decode: a breath after the last word is not
+        // a word, and decoding it invents one.
+        decoded =
+          VoiceTypeAudioTrim.speechBytes(in: remaining) < VoiceTypeDecodeWindow.minimumDecodableSpeechBytes
+          ? nil : await PTTLanguageIdentifier.shared.transcribe(pcm16k: remaining)
+        guard self.voiceTypeSession.isFlushing(token: flushToken) else { return }
+        if self.voiceTypingWindow.consumedBytes == consumedBefore { break }
+        log("PushToTalkManager: dictation flush overtaken by a stream commit — decoding the remainder again")
+        decoded = nil
+      }
       // The whole utterance, not just this window's decode: the planner diffs
       // against what is on screen, so handing it only the tail would delete
       // every committed word.
       let text = self.correctedForTyping(
         self.voiceTypingWindow.transcript(tail: decoded ?? ""), keywords: keywords)
+      let heardWakeWord = self.voiceTypeSession.heardWakeWord
       let completion = self.voiceTypeSession.endFlush(token: flushToken, finalTranscript: text)
+      if case .typed(let typed) = completion {
+        self.voiceTypingLastOutcome = (heardWakeWord, true, typed.count, self.voiceTypingCloudFinalsAdopted)
+      } else {
+        self.voiceTypingLastOutcome = (heardWakeWord, false, 0, self.voiceTypingCloudFinalsAdopted)
+      }
       log(
         "PushToTalkManager: dictation flushed — \(decoded == nil ? "nothing pending" : "\(decoded?.count ?? 0) chars decoded")"
           + ", \(self.voiceTypingCloudFinalsAdopted) stream finals, "
