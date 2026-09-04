@@ -15,9 +15,15 @@ import Foundation
 /// so a missed or misheard probe costs nothing but the early hub release.
 struct VoiceTypeWakeWordProbeSchedule: Equatable {
 
-  /// Voiced bytes (16 kHz s16le) at which each probe runs: enough for "type"
-  /// plus a word, then enough for the parser to be sure.
-  static let voicedByteThresholds = [Int(1.2 * 32_000), Int(2.6 * 32_000)]
+  /// Voiced bytes (16 kHz s16le) at which each probe runs. The first fires as
+  /// soon as there is enough voice for "type" plus the start of the next word
+  /// — the claim needs a word after the wake word — so the notch turns red
+  /// right after the user says "type". The rest are quick retries in case the
+  /// on-device model misheard the opening, spaced so a claim usually lands
+  /// under a second of speech.
+  static let voicedByteThresholds = [
+    Int(0.7 * 32_000), Int(1.1 * 32_000), Int(1.7 * 32_000), Int(2.6 * 32_000),
+  ]
   /// The most audio a probe decodes. The wake word opens the utterance; the
   /// rest of a long hold is not needed to find it.
   static let maxProbeBytes = 6 * 32_000

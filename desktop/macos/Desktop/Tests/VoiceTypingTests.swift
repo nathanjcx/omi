@@ -536,16 +536,18 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
     XCTAssertEqual(schedule.probesTaken, 0)
   }
 
-  func testProbesRunAtTheVoicedThresholdsAndThenStop() {
+  func testTheFirstProbeFiresUnderASecondOfVoiceAndThenRetries() {
     var schedule = VoiceTypeWakeWordProbeSchedule()
     var probeChunks: [Int] = []
     for index in 1...100 where schedule.observe(chunk: Self.chunk(voiced: true)) {
       probeChunks.append(index)
     }
-    // 3,200 voiced bytes per chunk: 1.2 s → 38,400 bytes → chunk 12;
-    // 2.6 s → 83,200 bytes → chunk 26. Never a third.
-    XCTAssertEqual(probeChunks, [12, 26])
-    XCTAssertEqual(schedule.probesTaken, 2)
+    // 3,200 voiced bytes per chunk. The first probe must land well under a
+    // second of voice so the dots turn red right after "type"; there are
+    // several quick retries and then no more.
+    XCTAssertEqual(schedule.probesTaken, VoiceTypeWakeWordProbeSchedule.voicedByteThresholds.count)
+    let firstProbeVoicedSeconds = Double(probeChunks[0] * 3_200) / 32_000
+    XCTAssertLessThan(firstProbeVoicedSeconds, 0.8)
   }
 
   func testRealMicrophoneChunksSmallerThanAWindowStillScheduleProbes() {
@@ -557,24 +559,30 @@ final class VoiceTypeWakeWordProbeScheduleTests: XCTestCase {
     for index in 1...600 where schedule.observe(chunk: Self.chunk(voiced: true, bytes: 342)) {
       probeChunks.append(index)
     }
-    // 38,400 voiced bytes → chunk 113 (38,646 bytes); 83,200 → chunk 244.
-    XCTAssertEqual(probeChunks.count, 2)
-    XCTAssertEqual(probeChunks[0], 113, accuracy: 2)
-    XCTAssertEqual(probeChunks[1], 244, accuracy: 2)
+    // The first probe still lands under a second of voice with real-sized
+    // chunks; all the configured retries fire and then no more.
+    XCTAssertEqual(probeChunks.count, VoiceTypeWakeWordProbeSchedule.voicedByteThresholds.count)
+    let firstProbeVoicedSeconds = Double(probeChunks[0] * 342) / 32_000
+    XCTAssertLessThan(firstProbeVoicedSeconds, 0.9)
   }
 
   func testSilenceBetweenWordsDoesNotCountTowardsTheThreshold() {
     var schedule = VoiceTypeWakeWordProbeSchedule()
     var probed = false
-    for _ in 0..<11 { probed = schedule.observe(chunk: Self.chunk(voiced: true)) || probed }
+    // Below the first threshold (0.7 s ≈ 7 voiced chunks), then a long pause.
+    for _ in 0..<5 { probed = schedule.observe(chunk: Self.chunk(voiced: true)) || probed }
     for _ in 0..<50 { probed = schedule.observe(chunk: Self.chunk(voiced: false)) || probed }
-    XCTAssertFalse(probed)
-    XCTAssertTrue(schedule.observe(chunk: Self.chunk(voiced: true)))
+    XCTAssertFalse(probed, "silence must not push voiced audio over the threshold")
+    // Enough further voice does cross it.
+    var crossed = false
+    for _ in 0..<5 { crossed = schedule.observe(chunk: Self.chunk(voiced: true)) || crossed }
+    XCTAssertTrue(crossed)
   }
 
   func testADecisionEndsProbingAndResetStartsOver() {
     var schedule = VoiceTypeWakeWordProbeSchedule()
-    for _ in 0..<12 { _ = schedule.observe(chunk: Self.chunk(voiced: true)) }
+    // Just past the first threshold (0.7 s ≈ 7 voiced chunks), before the next.
+    for _ in 0..<7 { _ = schedule.observe(chunk: Self.chunk(voiced: true)) }
     XCTAssertEqual(schedule.probesTaken, 1)
     schedule.decide()
     for _ in 0..<50 {
