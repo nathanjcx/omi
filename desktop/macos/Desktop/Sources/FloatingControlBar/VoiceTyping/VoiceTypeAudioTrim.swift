@@ -2,12 +2,10 @@ import Foundation
 
 /// Trims the quiet lead-in from a push-to-talk buffer before it is decoded.
 ///
-/// A hold starts when the key goes down, not when the user starts talking, and
-/// on a locked turn that gap can be seconds long. Handing that silence to the
-/// recognizer does not produce an empty string — it produces invented words,
-/// and voice typing reads the *start* of the utterance to decide whether the
-/// turn dictates at all. Measured live: 9 s of room tone decoded as 43
-/// characters of nonsense, which rejected the turn before "Type" was ever said.
+/// A hold starts at key-down, not when the user speaks, so a locked turn can
+/// open with seconds of room tone. The recognizer decodes that silence into
+/// invented words rather than an empty string, which corrupts the wake-word
+/// check at the start of the turn.
 enum VoiceTypeAudioTrim {
 
   /// RMS below this (of Int16 full scale) is room tone, not speech.

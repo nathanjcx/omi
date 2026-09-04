@@ -31,7 +31,7 @@ struct DictationTranscriber: Sendable {
   /// How long the backend gets before the on-device model takes the turn. The
   /// user is holding nothing and watching nothing; a paste that lands late is
   /// a paste the user has already given up on.
-  static let backendTimeout: TimeInterval = 12
+  static let defaultBackendTimeout: TimeInterval = 12
 
   /// Whether a network path was available when the turn closed. Decided once,
   /// by the caller, so the order below is fixed for the whole transcription.
@@ -41,7 +41,7 @@ struct DictationTranscriber: Sendable {
   /// Called with a bounded reason whenever the backend was tried and the
   /// on-device model had to take over, so the switch is observable.
   var didFallBack: @Sendable (String) async -> Void = { _ in }
-  var backendTimeout: TimeInterval = DictationTranscriber.backendTimeout
+  var backendTimeout: TimeInterval = DictationTranscriber.defaultBackendTimeout
 
   func transcribe(_ audio: Data) async -> Result? {
     guard !audio.isEmpty else { return nil }

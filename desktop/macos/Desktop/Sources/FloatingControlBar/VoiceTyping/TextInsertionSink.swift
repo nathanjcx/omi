@@ -40,8 +40,8 @@ final class PasteboardTextInsertionSink: TextInsertionSink {
 
   /// How long the focused app gets to read the pasteboard before the previous
   /// contents are put back. Apps read it synchronously on ⌘V; the delay only
-  /// covers event delivery.
-  private static let restoreDelay: TimeInterval = 0.4
+  /// covers event delivery, and is generous for a slow first responder.
+  private static let restoreDelay: TimeInterval = 0.6
   private static let vKeyCode: CGKeyCode = 9
   /// Clipboard managers honour this type by not recording the item, so a
   /// dictation does not pollute the user's clipboard history.
@@ -53,10 +53,32 @@ final class PasteboardTextInsertionSink: TextInsertionSink {
   /// that ⌘V would arrive as ⌥⌘V.
   private let source = CGEventSource(stateID: .privateState)
 
+  /// The real user clipboard to put back, and the scheduled work that does it,
+  /// while a dictation sits on the pasteboard. Held so a second dictation
+  /// within the restore window carries the *original* clipboard forward instead
+  /// of saving the first dictation as if it were the user's.
+  private var pendingRestore: (items: [[NSPasteboard.PasteboardType: Data]], work: DispatchWorkItem)?
+  /// The pasteboard `changeCount` right after this sink wrote a dictation. If it
+  /// still holds at restore time, nothing else wrote since (a ⌘V only reads), so
+  /// the restore is safe; a higher count means the user copied something and
+  /// that must win.
+  private var writtenChangeCount = 0
+
   func paste(_ text: String) -> Bool {
     guard !text.isEmpty else { return false }
     let pasteboard = NSPasteboard.general
-    let previous = Self.snapshot(pasteboard)
+    // A dictation this sink is still holding is not the user's clipboard —
+    // carry the original behind it forward rather than saving the dictation.
+    let previous: [[NSPasteboard.PasteboardType: Data]]
+    if let pending = pendingRestore, pasteboard.changeCount == writtenChangeCount {
+      pending.work.cancel()
+      previous = pending.items
+    } else {
+      pendingRestore?.work.cancel()
+      previous = Self.snapshot(pasteboard)
+    }
+    pendingRestore = nil
+
     pasteboard.clearContents()
     let item = NSPasteboardItem()
     item.setString(text, forType: .string)
@@ -69,12 +91,17 @@ final class PasteboardTextInsertionSink: TextInsertionSink {
       Self.restore(previous, to: pasteboard)
       return false
     }
-    DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay) {
-      // Only if the dictation is still what is on the clipboard: the user may
-      // have copied something of their own in the meantime, and that must win.
-      guard pasteboard.string(forType: .string) == text else { return }
+    writtenChangeCount = pasteboard.changeCount
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.pendingRestore = nil
+      // A ⌘V reads without bumping changeCount; a higher count means the user
+      // copied their own content, which must win.
+      guard pasteboard.changeCount == self.writtenChangeCount else { return }
       Self.restore(previous, to: pasteboard)
     }
+    pendingRestore = (previous, work)
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay, execute: work)
     return true
   }
 
