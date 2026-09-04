@@ -3144,7 +3144,7 @@ class PushToTalkManager: ObservableObject {
   /// clears the hint on its own.
   private func voiceTypingDidArm(turnID: VoiceTurnID) {
     if phase?.isRecording == true {
-      voiceTurnCoordinator.publish(.hintChanged(turnID: turnID, text: "Dictating — release to paste"))
+      voiceTurnCoordinator.publish(.dictationRecognized(turnID: turnID))
     }
     guard !voiceTypingReleasedHubTurn, isHubMode || isWaitingForHub else { return }
     voiceTypingReleasedHubTurn = true

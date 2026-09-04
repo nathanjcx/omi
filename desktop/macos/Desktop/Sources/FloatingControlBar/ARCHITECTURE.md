@@ -34,8 +34,11 @@ owns the dictate-or-ask decision and the delivery, and nothing else does.
   so a locked turn's silent lead-in does not trigger it. A probe that hears
   the wake word claims the turn, releases the hub turn (`cancelTurn`) so
   minutes of dictation are not streamed to a model whose answer will be
-  cancelled, and shows "Dictating — release to paste". A probe that misses is
-  harmless: the closing transcript decides on its own.
+  cancelled, and publishes `dictationRecognized` so the notch's eight dots
+  ease to red (`NotchVoiceMorphGeometry.dictationTint`, 0.45 s ease-in) while
+  keeping whatever motion they have — the waveform while listening, the ring
+  while the paste is prepared. A probe that misses is harmless: the closing
+  transcript decides on its own.
 - **The decision latches one way** (`VoiceTypeSession.claim`): once typing,
   always typing for that turn. Not-typing never latches, because a probe hears
   a couple of seconds of a sentence the user has barely started.
