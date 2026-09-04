@@ -106,6 +106,13 @@ final class VoiceTypeSession {
     return completion
   }
 
+  /// Whether `token` still names the open flush window. Lets a caller that
+  /// waits for a late transcript check it is still closing the turn it opened,
+  /// rather than one that has since been replaced.
+  func isFlushing(token: Int) -> Bool {
+    isFlushing && token == generation
+  }
+
   /// Opens the post-commit flush window. Returns the token `endFlush` must
   /// present, so a flush cannot land in a later turn.
   func beginFlush() -> Int {

@@ -17,6 +17,27 @@ enum VoiceTypeAudioTrim {
   /// attack of the first consonant.
   private static let preRollSamples = 1_600  // 100 ms
 
+  /// Whether the last `seconds` of the buffer are near-silence — the speaker
+  /// has paused, so text can be committed without cutting a word in half.
+  ///
+  /// Uses the same threshold as the leading trim: what counts as room tone at
+  /// the start of a turn counts as a pause in the middle of one.
+  static func endsQuiet(_ pcm16k: Data, seconds: Double = 0.35) -> Bool {
+    let tailSamples = Int(seconds * 16_000)
+    let sampleCount = pcm16k.count / 2
+    guard sampleCount >= tailSamples, tailSamples > 0 else { return false }
+    let start = (sampleCount - tailSamples) * 2
+    return pcm16k.withUnsafeBytes { raw -> Bool in
+      let samples = raw.bindMemory(to: Int16.self)
+      var sumSquares = 0.0
+      for index in (start / 2)..<sampleCount {
+        let value = Double(Int16(littleEndian: samples[index]))
+        sumSquares += value * value
+      }
+      return (sumSquares / Double(tailSamples)).squareRoot() < speechRMSThreshold
+    }
+  }
+
   /// - Parameter pcm16k: raw s16le 16 kHz mono.
   /// - Returns: the buffer from just before the first speech onward, or empty
   ///   when the whole buffer is quiet.

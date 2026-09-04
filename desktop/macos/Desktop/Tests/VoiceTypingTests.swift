@@ -125,6 +125,38 @@ final class VoiceTypeSessionTests: XCTestCase {
     XCTAssertEqual(sink.deletions, [], "a smooth turn never rewrites what it typed")
   }
 
+  func testTheExactProbeSequenceFromAFailedLiveTurnDictates() {
+    // Replayed verbatim from a live turn (pid 85563) that typed nothing and let
+    // the model spawn an agent instead. The recognizer heard the wake word on
+    // every probe, so if this passes the fault is in the manager's plumbing,
+    // not in the parser or the stabilizer.
+    let (session, sink) = makeSession()
+    session.begin()
+    for probe in [
+      "Type.",
+      "Type and",
+      "Type. I don't know.",
+      "Type. I don't know.",
+      "Type. I don't know why.",
+      "Type, I don't know why I did that.",
+      "Type, I don't know why I did that.",
+    ] {
+      session.update(transcript: probe)
+    }
+    XCTAssertTrue(session.claimsTurn, "the turn should have been claimed for typing")
+    XCTAssertFalse(sink.typed.isEmpty, "something should have been typed")
+  }
+
+  func testAWakeWordFollowedByAFullStopStillDictates() {
+    // "Type." is what the recognizer returns when the user pauses after the
+    // wake word, which is the natural way to say it.
+    let (session, _) = makeSession()
+    session.begin()
+    session.update(transcript: "Type. Okay, so this is decent I guess.")
+    session.update(transcript: "Type. Okay, so this is decent I guess.")
+    XCTAssertTrue(session.claimsTurn)
+  }
+
   func testOrdinaryQuestionIsLeftToChatAndTypesNothing() {
     let (session, sink) = makeSession()
     session.begin()
@@ -138,7 +170,8 @@ final class VoiceTypeSessionTests: XCTestCase {
     session.begin()
     session.update(transcript: "Type send it to nate")
     session.update(transcript: "Type send it to nate")
-    // The contextual corrector fixes the name only on the final transcript.
+    // A late transcript revision (recognizer or lexical correction) lands only
+    // on the closing decode, after the probes have already typed the old text.
     XCTAssertEqual(session.finish(transcript: "Type send it to Nathan"), .typed("Send it to Nathan"))
     XCTAssertEqual(sink.typed, "Send it to Nathan")
   }
@@ -226,6 +259,28 @@ final class VoiceTypeSessionTests: XCTestCase {
       session.endFlush(token: token, finalTranscript: "what is on my calendar"), .none)
   }
 
+  func testOnlyTheOpenFlushWindowIsOwned() {
+    // The backend stream is finalized asynchronously, so the caller waits for
+    // its last words. It must not close a turn that has since been replaced.
+    let (session, _) = makeSession()
+    session.begin()
+    session.update(transcript: "Type hello")
+    let token = session.beginFlush()
+    XCTAssertTrue(session.isFlushing(token: token))
+    session.begin()
+    XCTAssertFalse(
+      session.isFlushing(token: token), "a new turn invalidates the previous flush window")
+  }
+
+  func testAClosedFlushIsNoLongerOwned() {
+    let (session, _) = makeSession()
+    session.begin()
+    session.update(transcript: "Type hello")
+    let token = session.beginFlush()
+    _ = session.endFlush(token: token, finalTranscript: "Type hello there")
+    XCTAssertFalse(session.isFlushing(token: token))
+  }
+
   func testAStaleFlushReportsNothingSoItCannotJournalIntoTheNextTurn() {
     let (session, _) = makeSession()
     session.begin()
@@ -233,6 +288,228 @@ final class VoiceTypeSessionTests: XCTestCase {
     let stale = session.beginFlush()
     session.begin()
     XCTAssertEqual(session.endFlush(token: stale, finalTranscript: "Type first"), .none)
+  }
+}
+
+final class VoiceTypeDecodeWindowTests: XCTestCase {
+
+  private func audio(seconds: Double) -> Data {
+    Data(count: Int(seconds * 16_000) * 2)
+  }
+
+  func testAShortWindowIsNotCommittedYet() {
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 3))
+    XCTAssertFalse(w.commitIfReady(tail: "hello there", endsQuiet: true))
+    XCTAssertFalse(w.hasCommitted)
+    XCTAssertEqual(w.transcript(tail: "hello there"), "hello there")
+  }
+
+  func testCommitsAtAPauseOnceLongEnoughAndDropsThatAudio() {
+    // Once text is typed it stops being reconsidered, and its audio stops
+    // being decoded — that is what keeps every probe cheap on a long hold.
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 7))
+    XCTAssertTrue(w.commitIfReady(tail: "the first part", endsQuiet: true))
+    XCTAssertEqual(w.pendingAudio.count, 0, "committed audio is dropped")
+    XCTAssertEqual(
+      w.transcript(tail: "and the rest"), "the first part and the rest",
+      "the planner still receives the whole utterance")
+  }
+
+  func testMidWordIsNotCutWhileTheSpeakerIsStillTalking() {
+    // Committing mid-word hands the next window a fragment, which it spells
+    // wrong. Past the target the window waits for a pause.
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 7))
+    XCTAssertFalse(w.commitIfReady(tail: "still going", endsQuiet: false))
+    XCTAssertFalse(w.hasCommitted)
+  }
+
+  func testASpeakerWhoNeverPausesIsForcedAtTheHardLimit() {
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 21))
+    XCTAssertTrue(w.commitIfReady(tail: "no breath at all", endsQuiet: false))
+    XCTAssertEqual(w.pendingAudio.count, 0)
+  }
+
+  func testCommittingRepeatsSoAHoldHasNoLengthLimit() {
+    var w = VoiceTypeDecodeWindow()
+    for word in ["one", "two", "three"] {
+      w.append(audio(seconds: 7))
+      XCTAssertTrue(w.commitIfReady(tail: word, endsQuiet: true))
+    }
+    XCTAssertEqual(w.transcript(tail: "four"), "one two three four")
+    XCTAssertEqual(w.pendingAudio.count, 0)
+  }
+
+  func testASilentWindowIsNeverCommitted() {
+    // Committing silence would strand the rest of the turn behind a prefix
+    // that can never be revised.
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 25))
+    XCTAssertFalse(w.commitIfReady(tail: "   ", endsQuiet: true))
+    XCTAssertFalse(w.hasCommitted)
+  }
+
+  func testResetForgetsTheTurn() {
+    var w = VoiceTypeDecodeWindow()
+    w.append(audio(seconds: 7))
+    _ = w.commitIfReady(tail: "previous turn", endsQuiet: true)
+    w.reset()
+    XCTAssertFalse(w.hasCommitted)
+    XCTAssertEqual(w.pendingAudio.count, 0)
+    XCTAssertEqual(w.transcript(tail: "new turn"), "new turn")
+  }
+}
+
+final class VoiceTypeAudioPauseTests: XCTestCase {
+
+  func testSilenceAtTheEndReadsAsAPause() {
+    let speech = (0..<16_000).map { Int16(truncatingIfNeeded: ($0 % 2 == 0 ? 6_000 : -6_000)) }
+    var samples = speech
+    samples.append(contentsOf: [Int16](repeating: 0, count: 16_000))
+    var copy = samples.map { $0.littleEndian }
+    let data = copy.withUnsafeMutableBufferPointer { Data(buffer: $0) }
+    XCTAssertTrue(VoiceTypeAudioTrim.endsQuiet(data))
+  }
+
+  func testSpeechAtTheEndIsNotAPause() {
+    let speech = (0..<32_000).map { Int16(truncatingIfNeeded: ($0 % 2 == 0 ? 6_000 : -6_000)) }
+    var copy = speech.map { $0.littleEndian }
+    let data = copy.withUnsafeMutableBufferPointer { Data(buffer: $0) }
+    XCTAssertFalse(VoiceTypeAudioTrim.endsQuiet(data))
+  }
+}
+
+final class VoiceTypeTranscriptSourceTests: XCTestCase {
+
+  func testTypesTheLocalDecodeUntilTheCloudHasAnything() {
+    // The whole point of starting on-device: the first keystrokes land without
+    // waiting for a socket and a round trip.
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.transcript(
+        onDevice: "hello th", hub: "", cloud: "", cloudFailed: false),
+      "hello th")
+  }
+
+  func testTheHubNeverDisplacesTheLocalDecode() {
+    // The live bug: Gemini's input-transcription deltas were fed into the same
+    // session as the on-device probes. The stabilizer releases text only when
+    // two *consecutive* decodes agree, so alternating two recognizers made it
+    // agree with nothing — a dictation typed zero characters while every probe
+    // had plainly heard "Type".
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.preferred(
+        onDevice: "Type. I don't know why", hub: "type i dont know", cloud: "",
+        cloudFailed: false),
+      .onDevice)
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.transcript(
+        onDevice: "Type. I don't know why", hub: "type i dont know", cloud: "",
+        cloudFailed: false),
+      "Type. I don't know why")
+  }
+
+  func testTheHubIsUsedOnlyWhenNothingElseHasHeardAnything() {
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.preferred(
+        onDevice: "", hub: "type hello", cloud: "", cloudFailed: false),
+      .hub)
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.transcript(
+        onDevice: "", hub: "type hello", cloud: "", cloudFailed: false),
+      "type hello")
+  }
+
+  func testTheCloudOutranksBothOtherSources() {
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.preferred(
+        onDevice: "local text", hub: "hub text", cloud: "cloud text", cloudFailed: false),
+      .cloud)
+  }
+
+  func testHandsOverToTheCloudAsSoonAsItProducesText() {
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.transcript(
+        onDevice: "hello their", hub: "", cloud: "hello there", cloudFailed: false),
+      "hello there")
+  }
+
+  func testWhitespaceOnlyCloudTextIsNotAHandover() {
+    // An opened socket that has produced nothing but padding must not replace a
+    // local decode with a blank line.
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.transcript(
+        onDevice: "hello there", hub: "", cloud: "   \n", cloudFailed: false),
+      "hello there")
+  }
+
+  func testAFailedStreamRevertsToTheLocalDecode() {
+    // Reverting on reported failure, not on a transcript that merely stopped
+    // growing: a stream that dies mid-turn would otherwise freeze the typed
+    // text at whatever it had managed to send.
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.transcript(
+        onDevice: "hello there friend", hub: "", cloud: "hello", cloudFailed: true),
+      "hello there friend")
+    XCTAssertEqual(
+      VoiceTypeTranscriptSource.preferred(
+        onDevice: "hello there friend", hub: "", cloud: "hello", cloudFailed: true),
+      .onDevice)
+  }
+}
+
+final class DictationLexicalCorrectionTests: XCTestCase {
+
+  func testAnOnScreenNameCorrectsAGreetingTarget() {
+    // What the corrector actually covers: a name in a greeting construct.
+    // Dictation decoded straight from the recognizer and never got even this.
+    XCTAssertEqual(
+      PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: ["Nathan"]),
+      "send hi to Nathan")
+  }
+
+  func testCorrectionIsIdempotentSoCorrectingEveryProbeCannotFlicker() {
+    // The stabilizer releases text once two consecutive decodes agree. If
+    // correction were unstable, correcting each probe would break that
+    // agreement and reintroduce the flicker the stabilizer exists to remove.
+    let once = PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: ["Nathan"])
+    let twice = PTTTranscriptContextualCorrector.correct(once, keywords: ["Nathan"])
+    XCTAssertEqual(once, twice)
+  }
+
+  func testTheCorrectorLeavesAWakeWordIntact() {
+    // Dictation now runs every probe through the corrector. If it altered the
+    // opening word at all, the parser would stop recognising the command.
+    for probe in [
+      "Type.",
+      "Type. I don't know.",
+      "Type, I don't know why I did that.",
+      "Type. Okay, so this is decent I guess.",
+    ] {
+      XCTAssertEqual(
+        PTTTranscriptContextualCorrector.correct(probe, keywords: []), probe,
+        "the corrector must not touch \(probe)")
+    }
+  }
+
+  func testNoKeywordsLeavesDictationAlone() {
+    // With Screen Recording denied there are no keywords, and dictation must
+    // still be typed exactly as heard.
+    XCTAssertEqual(
+      PTTTranscriptContextualCorrector.correct("send hi to nate", keywords: []),
+      "send hi to nate")
+  }
+
+  func testAnOnScreenNameOutsideAGreetingIsNotCorrected() {
+    // The limit of the existing corrector, pinned so it is not mistaken for
+    // general proper-noun correction: plain dictation is left as heard even
+    // with the right spelling on screen. Closing this gap needs recognizer-level
+    // vocabulary biasing, not another regex.
+    XCTAssertEqual(
+      PTTTranscriptContextualCorrector.correct("send it to nate", keywords: ["Nathan"]),
+      "send it to nate")
   }
 }
 
